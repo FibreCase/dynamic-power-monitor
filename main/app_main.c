@@ -45,48 +45,12 @@
 
 #include "ina226.h"
 #include "ssd1306.h"
+#include "config.h"
 
 static const char *TAG = "power-mon";
 
-// ---------------------------------------------------------------------------
-// Configuration — edit to match your hardware / network.
-// ---------------------------------------------------------------------------
-#define CFG_WIFI_SSID    "CHANGE_ME_SSID"
-#define CFG_WIFI_PASS    "CHANGE_ME_PASSWORD"
-#define CFG_HOST_IP      "192.168.1.100"   // Python host
-#define CFG_HOST_PORT    8888
-#define CFG_NTP_HOST     "ntp.aliyun.com"  // SNTP server (UTC)
-
-// I2C pins (shared bus: INA226 + SSD1306). Internal pull-ups are enabled in code.
-#define CFG_I2C_SDA      GPIO_NUM_4
-#define CFG_I2C_SCL      GPIO_NUM_5
-
-// Status LED: push-pull, active HIGH (high = lit).
-//   no WiFi      -> slow blink (500 ms)
-//   idle (0.1Hz) -> steady on
-//   fast (10 Hz) -> fast blink (100 ms)
-#define CFG_LED_PIN      GPIO_NUM_8
-#define CFG_LED_SLOW_MS  500u
-#define CFG_LED_FAST_MS  100u
-
-// INA226 ALERT pin (open-drain, active low). Monitored as an input.
-#define CFG_ALERT_PIN    GPIO_NUM_3
-
-// USB-JTAG: GPIO18 (D-) / GPIO19 (D+) are used by the built-in USB-Serial-JTAG.
-// Do NOT repurpose these pins.
-#define CFG_USB_JTAG_DMINUS  GPIO_NUM_18
-#define CFG_USB_JTAG_DPLUS   GPIO_NUM_19
-
-// INA226 calibration: shunt resistance and expected MAXIMUM current.
-// The chip requires max_current * shunt <= 81.9 mV. 10 A needs shunt <= ~8.2 mOhm.
-#define CFG_MAX_CURRENT_A  10.0f
-#define CFG_SHUNT_OHM      0.005f          // 5 mOhm  ->  50 mV at 10 A  (OK)
-
-// Behaviour
-#define DEFAULT_INTERVAL_MS 10000u   // 0.1 Hz idle
-#define FAST_INTERVAL_MS    100u     // 10 Hz
-#define OLED_REFRESH_MS     100u     // hard cap: never faster
-#define TCP_RETRY_MS        2000u    // reconnect period
+// All tunable configuration (WiFi, host, pins, shunt, intervals) lives in
+// config.h — see config.h.example.
 
 // ---------------------------------------------------------------------------
 // Runtime state

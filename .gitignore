@@ -32,6 +32,9 @@ flasher_args.json # Generated in build directory
 sdkconfig.old
 sdkconfig
 
+# Firmware config (holds WiFi credentials) — only config.h.example is tracked
+main/config.h
+
 # ESP-IDF dependencies
 # For older versions or manual component management
 /components/.idf/

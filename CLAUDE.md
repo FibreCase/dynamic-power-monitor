@@ -20,7 +20,7 @@ The local IDF is at `/home/fibre/.espressif/v6.0.1/esp-idf`. Export it first, th
 - Build: `source $IDF_PATH/export.sh && idf.py build`
 - Set target (once, already done): `idf.py set-target esp32c3`
 - Flash + monitor: `idf.py -p PORT flash monitor`
-- Menuconfig (pins, WiFi, etc. live in `main/app_main.c`, not sdkconfig): `idf.py menuconfig`
+- Menuconfig (pins, WiFi, etc. live in `main/config.h`, not sdkconfig): `idf.py menuconfig`
 - Clean: `idf.py fullclean`
 
 The build uses `-Werror`, so any warning in `main/` fails the build — keep it warning-free.
@@ -76,7 +76,7 @@ Key invariants (all in `app_main.c` unless noted):
 - **OLED anti-stutter**: `render_oled()` is capped at once per **100 ms** (`OLED_REFRESH_MS`) so it never starves I²C/TCP at 10 Hz.
 - **Clock**: SNTP via `esp_sntp_*` (server `ntp.aliyun.com`, UTC) and **blocks until synced** (`ntp_sync_block`) before sampling. `get_epoch_ms()` wraps `gettimeofday()`.
 - **TCP**: blocking socket with `TCP_NODELAY`; a small state machine (`tcp_step`) handles non-blocking connect, `poll`, and auto-reconnect every `TCP_RETRY_MS`. `process_downstream()` reassembles sticky/partial packets, verifies the checksum, and applies `IntervalMs` (updates the sampling period **and** the OLED mode label).
-- **Config lives in `main/app_main.c`** as `CFG_*` macros at the top. Edit before flashing:
+- **Config lives in `main/config.h`** (created from `main/config.h.example`; the real one is git-ignored because it holds WiFi creds). Edit before flashing:
   - WiFi SSID/pass, host IP/port, NTP host.
   - I²C pins `CFG_I2C_SDA`=GPIO4 / `CFG_I2C_SCL`=GPIO5 (internal pull-ups enabled).
   - `CFG_LED_PIN`=GPIO8 (push-pull, active HIGH): no WiFi → slow blink (500 ms), idle (0.1 Hz) → steady on, 10 Hz → fast blink (100 ms).
