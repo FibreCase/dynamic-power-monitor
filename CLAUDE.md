@@ -72,11 +72,17 @@ The firmware has no external display/sensor libraries — INA226 and SSD1306 are
 - `fonts.c` — generated 5×7 font (chars 0x20–0x7E).
 
 Key invariants (all in `app_main.c` unless noted):
-- **Shared I²C bus**: INA226 (`0x40`) and SSD1306 (`0x3C`) on one bus; pins `CFG_I2C_SDA`/`CFG_I2C_SCL` (GPIO8/9 default), internal pull-ups enabled.
+- **Shared I²C bus**: INA226 (`0x40`) and SSD1306 (`0x3C`) on one bus; pins `CFG_I2C_SDA`=GPIO4 / `CFG_I2C_SCL`=GPIO5, internal pull-ups enabled.
 - **OLED anti-stutter**: `render_oled()` is capped at once per **100 ms** (`OLED_REFRESH_MS`) so it never starves I²C/TCP at 10 Hz.
 - **Clock**: SNTP via `esp_sntp_*` (server `ntp.aliyun.com`, UTC) and **blocks until synced** (`ntp_sync_block`) before sampling. `get_epoch_ms()` wraps `gettimeofday()`.
 - **TCP**: blocking socket with `TCP_NODELAY`; a small state machine (`tcp_step`) handles non-blocking connect, `poll`, and auto-reconnect every `TCP_RETRY_MS`. `process_downstream()` reassembles sticky/partial packets, verifies the checksum, and applies `IntervalMs` (updates the sampling period **and** the OLED mode label).
-- **Config lives in `main/app_main.c`** as `CFG_*` macros at the top — WiFi SSID/pass, host IP/port, NTP host, I²C pins, and the INA226 `CFG_MAX_CURRENT_A` / `CFG_SHUNT_OHM`. Edit these before flashing; the shunt/resistor choice sets every current & power reading.
+- **Config lives in `main/app_main.c`** as `CFG_*` macros at the top. Edit before flashing:
+  - WiFi SSID/pass, host IP/port, NTP host.
+  - I²C pins `CFG_I2C_SDA`=GPIO4 / `CFG_I2C_SCL`=GPIO5 (internal pull-ups enabled).
+  - `CFG_LED_PIN`=GPIO8 (push-pull, active HIGH): no WiFi → slow blink (500 ms), idle (0.1 Hz) → steady on, 10 Hz → fast blink (100 ms).
+  - `CFG_ALERT_PIN`=GPIO3 (INA226 ALERT, open-drain/active-low; polled as an input, pulled up; logged on transition and periodically if held).
+  - `CFG_MAX_CURRENT_A` / `CFG_SHUNT_OHM` — the shunt sets every current & power reading (10 A needs shunt ≤ 8.2 mΩ).
+  - GPIO18/19 are the built-in USB-Serial-JTAG — do **not** repurpose them.
 
 ### Python backend (`./python/power_monitor/`, uv-managed, Python ≥3.10)
 - **`protocol.py`** — the single source of truth for the wire contract: 20-byte sample decode (`parse_sample`) and the 8-byte control pack (`build_control_set_interval`), plus checksum. Keep in sync with `main/app_main.c`.

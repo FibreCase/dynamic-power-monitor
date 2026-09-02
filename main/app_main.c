@@ -41,6 +41,7 @@
 #include "esp_sntp.h"
 #include "esp_timer.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 
 #include "ina226.h"
 #include "ssd1306.h"
@@ -56,9 +57,25 @@ static const char *TAG = "power-mon";
 #define CFG_HOST_PORT    8888
 #define CFG_NTP_HOST     "ntp.aliyun.com"  // SNTP server (UTC)
 
-// I2C pins (esp32-c3-devkitm-1 default). Internal pull-ups are enabled in code.
-#define CFG_I2C_SDA      GPIO_NUM_8
-#define CFG_I2C_SCL      GPIO_NUM_9
+// I2C pins (shared bus: INA226 + SSD1306). Internal pull-ups are enabled in code.
+#define CFG_I2C_SDA      GPIO_NUM_4
+#define CFG_I2C_SCL      GPIO_NUM_5
+
+// Status LED: push-pull, active HIGH (high = lit).
+//   no WiFi      -> slow blink (500 ms)
+//   idle (0.1Hz) -> steady on
+//   fast (10 Hz) -> fast blink (100 ms)
+#define CFG_LED_PIN      GPIO_NUM_8
+#define CFG_LED_SLOW_MS  500u
+#define CFG_LED_FAST_MS  100u
+
+// INA226 ALERT pin (open-drain, active low). Monitored as an input.
+#define CFG_ALERT_PIN    GPIO_NUM_3
+
+// USB-JTAG: GPIO18 (D-) / GPIO19 (D+) are used by the built-in USB-Serial-JTAG.
+// Do NOT repurpose these pins.
+#define CFG_USB_JTAG_DMINUS  GPIO_NUM_18
+#define CFG_USB_JTAG_DPLUS   GPIO_NUM_19
 
 // INA226 calibration: shunt resistance and expected MAXIMUM current.
 // The chip requires max_current * shunt <= 81.9 mV. 10 A needs shunt <= ~8.2 mOhm.
@@ -79,7 +96,12 @@ static i2c_master_dev_handle_t  s_ina, s_oled;
 
 static esp_netif_t *s_netif;
 static bool s_wifi_up = false;
+static volatile bool s_wifi_disconnected = false;   // set on STA_DISCONNECTED
 static bool s_ntp_synced = false;
+
+// INA226 ALERT pin state (debounced for logging).
+static volatile int  s_alert_active = 0;
+static uint32_t      s_last_alert_log = 0;
 
 static volatile uint32_t s_interval_ms = DEFAULT_INTERVAL_MS;
 static char  s_mode[8] = "0.1Hz";
@@ -282,15 +304,83 @@ static void render_oled(void)
 }
 
 // ---------------------------------------------------------------------------
+// Status LED + INA226 ALERT pin
+// ---------------------------------------------------------------------------
+// Push-pull, active HIGH. No WiFi -> slow blink, idle -> steady on, 10 Hz -> fast blink.
+static void led_update(uint32_t now)
+{
+    bool fast = (s_interval_ms <= 1000u);
+    bool wifi_ok = s_wifi_up && !s_wifi_disconnected;
+
+    bool on;
+    if (!wifi_ok)
+        on = (now / CFG_LED_SLOW_MS) & 1u;   // slow blink: not connected to WiFi
+    else if (fast)
+        on = (now / CFG_LED_FAST_MS) & 1u;   // fast blink: 10 Hz sampling
+    else
+        on = true;                           // steady on: idle
+    gpio_set_level(CFG_LED_PIN, on ? 1 : 0);
+}
+
+// ALERT is open-drain / active-low. Debounced: log on transition and, if held,
+// periodically with the last reading so the cause (OVP/OCP/bus fault) is findable.
+static void alert_poll(uint32_t now)
+{
+    int active = (gpio_get_level(CFG_ALERT_PIN) == 0) ? 1 : 0;
+    if (active != s_alert_active) {
+        s_alert_active = active;
+        s_last_alert_log = now;
+        if (active) {
+            ESP_LOGW(TAG, "INA226 ALERT asserted");
+        } else {
+            ESP_LOGI(TAG, "INA226 ALERT cleared");
+        }
+    } else if (active && (now - s_last_alert_log > 10000u)) {
+        ESP_LOGW(TAG, "INA226 ALERT held (V=%.2f I=%.0fmA P=%.1fW)",
+                 s_last_v, s_last_i, s_last_p / 1000.0f);
+        s_last_alert_log = now;
+    }
+}
+
+static void led_init(void)
+{
+    gpio_config_t io = { 0 };
+    io.pin_bit_mask = 1ULL << CFG_LED_PIN;
+    io.mode         = GPIO_MODE_OUTPUT;
+    io.pull_up_en   = GPIO_PULLUP_DISABLE;
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+    gpio_set_level(CFG_LED_PIN, 0);
+}
+
+static void alert_gpio_init(void)
+{
+    gpio_config_t io = { 0 };
+    io.pin_bit_mask = 1ULL << CFG_ALERT_PIN;
+    io.mode         = GPIO_MODE_INPUT;
+    io.pull_up_en   = GPIO_PULLUP_ENABLE;   // ALERT is open-drain; pull up when idle
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+}
+
+// ---------------------------------------------------------------------------
 // WiFi + NTP
 // ---------------------------------------------------------------------------
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)data;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        // Link lost; the STA retries automatically. LED drops to slow blink.
+        s_wifi_disconnected = true;
+        ESP_LOGW(TAG, "WiFi disconnected (auto-retrying)");
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        s_wifi_disconnected = false;
         ESP_LOGI(TAG, "WiFi connected");
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         s_wifi_up = true;
+        s_wifi_disconnected = false;
     }
 }
 
@@ -398,6 +488,9 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+    led_init();        // starts off; driven each loop iteration
+    alert_gpio_init(); // INA226 ALERT as a polled input
+
     e = init_i2c();
     if (e != ESP_OK) { ESP_LOGE(TAG, "I2C init failed: %s", esp_err_to_name(e)); return; }
 
@@ -430,6 +523,9 @@ void app_main(void)
 
     for (;;) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+        led_update(now);
+        alert_poll(now);
 
         tcp_step(now);
         process_downstream();
