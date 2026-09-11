@@ -1,3 +1,6 @@
 [submodule "python"]
 	path = python
 	url = https://github.com/FibreCase/dynamic-power-monitor-backend.git
+[submodule "components/u8g2"]
+	path = components/u8g2
+	url = https://github.com/olikraus/u8g2.git

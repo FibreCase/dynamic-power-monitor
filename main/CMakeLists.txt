@@ -1,4 +1,4 @@
-idf_component_register(SRCS "app_main.c" "ina226.c" "ssd1306.c" "fonts.c"
+idf_component_register(SRCS "app_main.c" "ina226.c" "u8g2_esp_hal.c"
                        INCLUDE_DIRS "."
                        PRIV_REQUIRES
                            nvs_flash
@@ -10,7 +10,8 @@ idf_component_register(SRCS "app_main.c" "ina226.c" "ssd1306.c" "fonts.c"
                            esp_timer
                            lwip
                            app_update
-                           driver)
+                           driver
+                           u8g2)
 
 # config.h is git-ignored (holds WiFi credentials) and created locally from
 # config.h.example. Fail at configure time with a clear message rather than a

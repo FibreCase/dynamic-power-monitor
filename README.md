@@ -5,12 +5,13 @@ power sensor, renders the readings on a 128×32 SSD1306 OLED, and streams
 samples over a long-lived TCP connection to a Python backend that persists them
 and serves them over WebSocket + HTTP.
 
-The authoritative specification is [TASK.md]. This repo implements it in two
+The authoritative specification is [TASK.md]. This repo implements it in three
 independent components:
 
 - **Firmware** (repo root, `main/`) — ESP32-C3, ESP-IDF (C), target `esp32c3`.
 - **Backend** (`python/`) — a git **submodule** → `FibreCase/dynamic-power-monitor-backend`;
   Python, managed with `uv`, FastAPI + async TCP + SQLite.
+- **Dashboard** (`python/web/`) — React + Vite + ECharts, served by the backend itself.
 
 See [CLAUDE.md] for the wire protocol and architecture notes.
 
@@ -21,10 +22,10 @@ See [CLAUDE.md] for the wire protocol and architecture notes.
 ├── main/                  # ESP32-C3 firmware (ESP-IDF component)
 │   ├── app_main.c         #   NVS → I2C → OLED → INA226 → WiFi → NTP → main loop
 │   ├── ina226.{h,c}       #   INA226 driver (10 A calibration, 64/512 averaging)
-│   ├── ssd1306.{h,c}      #   SSD1306 128x32 driver (I2C, 5x7 text)
-│   └── fonts.c            #   generated 5x7 font
+│   └── u8g2_esp_hal.{h,c} #   u8g2 <-> ESP-IDF I2C glue for the SSD1306 OLED
+├── components/u8g2/       # git submodule: u8g2 graphics library (pinned 2.37.1)
 ├── CMakeLists.txt         # top-level ESP-IDF project
-├── python/                # git submodule: Python backend
+├── python/                # git submodule: Python backend (+ web/ dashboard, see Dashboard section)
 └── TASK.md                # specification (not committed)
 ```
 
@@ -60,3 +61,23 @@ uv run uvicorn power_monitor.app:app --host 0.0.0.0 --port 8000
 - End-to-end test (no hardware): `uv run python -m tests/e2e.py`.
 
 Configuration is via `PM_*` environment variables (see `python/power_monitor/config.py`).
+
+## Dashboard
+
+A React + Vite single-page app (`python/web/`) with two tabs — **实时监控**
+(live, WebSocket-driven chart) and **历史查询** (history, queries
+`/api/v1/history`) — built with ECharts. It's served by the backend itself,
+same-origin, so no separate process or CORS is needed in production.
+
+```bash
+cd python/web
+npm install
+npm run build        # outputs python/web/dist/, served by FastAPI at "/"
+```
+
+During development, run it against a running backend with hot reload:
+
+```bash
+cd python/web
+npm run dev           # http://localhost:5173, proxies /api, /ws, /healthz -> :8000
+```
