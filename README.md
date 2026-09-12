@@ -95,19 +95,23 @@ no `factory` — `nvs` 0x9000, `otadata` 0xf000, `phy_init` 0x11000, then
 so the running image is confirmed valid (and the next OTA is allowed). Keep the
 `.bin` well under one slot (~1.65 MB; the current build is ~980 KB).
 
-**To publish an update:**
+**To publish an update** (backend-hosted, dashboard-driven):
 1. Build the new firmware: `idf.py build` → `build/esp32-power-monitor.bin`.
    (Bump the version so the firmware can tell it differs from the running one;
    a same-version image is rejected as a no-op.)
-2. Serve that `.bin` at the configured path. The backend host is the default
-   target, e.g. `python/` serving `/ota/firmware.bin` on port `8000`.
-3. Send the downstream OTA command over the TCP connection — the 8-byte frame
-   `struct.pack('<BBBBHH', 0xBB, 0x66, 0x02, 0x02, 0x00, checksum)` (payload is
-   ignored for this command; `checksum = sum of the first 6 bytes & 0xFFFF`).
+2. In the dashboard, use the **固件更新（OTA）** panel: choose the `.bin`
+   ("选择 .bin 固件") — it uploads to the backend (`POST /ota/upload`) and is
+   stored where the firmware will download it from (`/ota/firmware.bin`).
+3. Click **推送到设备**. The backend sends the downstream OTA command
+   (`cmd=0x02`) over the TCP link; the device then `GET`s `/ota/firmware.bin`
+   and reboots into the new image. The button is enabled only when a firmware
+   is uploaded *and* the device is online.
 
-> **Status:** the firmware side is implemented and builds clean. The trigger
-> today is the raw `cmd=0x02` frame; the backend endpoint that serves the `.bin`
-> and the dashboard "update" button are not yet wired up (intended next step).
+> **Status:** the full loop is implemented — firmware download/validate/reboot,
+> the backend upload + serve + trigger endpoints, and the dashboard panel — with
+> a passing end-to-end test (the e2e suite covers upload → `cmd=0x02` delivery
+> to a connected fake device + image serving). On-device flashing of a real image
+> is the only step left, and needs a physical ESP32.
 
 ## Backend
 
