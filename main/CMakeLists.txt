@@ -1,4 +1,6 @@
-idf_component_register(SRCS "app_main.c" "ina226.c" "u8g2_esp_hal.c"
+idf_component_register(SRCS "app_main.c" "core.c" "net_task.c" "sample_task.c"
+                       "display.c" "status.c" "wifi_ntp.c" "ina226.c"
+                       "u8g2_esp_hal.c"
                        INCLUDE_DIRS "."
                        PRIV_REQUIRES
                            nvs_flash
