@@ -45,6 +45,7 @@
 
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -133,6 +134,22 @@ void app_main(void) {
 
   ESP_LOGI(TAG, "ready: max=%.0fA shunt=%.3fOhm interval=%ums",
            CFG_MAX_CURRENT_A, CFG_SHUNT_OHM, (unsigned)s_interval_ms);
+
+  // Confirm this app is workable so the OTA rollback machinery is coherent.
+  // - A freshly-OTA'd app is in PENDING_VERIFY on first boot; this flips it to
+  //   VALID so it is no longer eligible for rollback (and the next OTA is
+  //   allowed). Without this the bootloader would revert to the old app.
+  // - A directly-flashed app is NEW; this flips it to VALID too, so the
+  //   passive slot is well-defined.
+  // - An already-VALID app: no-op.
+  // Only reached after WiFi + NTP + peripherals are up, i.e. the app has
+  // clearly booted. If a bad update crashes before this line, the bootloader
+  // (with app rollback enabled) reverts to the previous app automatically.
+  esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+  if (err == ESP_OK)
+    ESP_LOGI(TAG, "OTA: running app confirmed valid (rollback armed)");
+  else
+    ESP_LOGW(TAG, "OTA: mark_app_valid failed (%s)", esp_err_to_name(err));
 
   // Start the tasks. Priority order: display > sample > {net, status}.
   status_task_create();

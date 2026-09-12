@@ -62,3 +62,18 @@
 #define FAST_INTERVAL_MS    100u     // 10 Hz
 #define OLED_REFRESH_MS     100u     // hard cap: never faster
 #define TCP_RETRY_MS        2000u    // reconnect period
+
+// ---------------------------------------------------------------------------
+// OTA (over-the-air update)
+// ---------------------------------------------------------------------------
+// When the host sends the downstream OTA command (0xBB 0x66 cmd=0x02) the
+// firmware GETs `http://CFG_OTA_HOST_IP:CFG_OTA_HOST_PORT<CFG_OTA_URL_PATH>`,
+// writes the .bin into the passive OTA slot, and reboots into it if it passes
+// validation. The backend must serve the new build's
+// `build/esp32-power-monitor.bin` at that path.
+//
+// Default points at the Python backend's HTTP server (port 8000, same host as
+// the TCP ingest server). Adjust if you host the .bin elsewhere.
+#define CFG_OTA_HOST_IP     "192.168.1.100"
+#define CFG_OTA_HOST_PORT   8000
+#define CFG_OTA_URL_PATH    "/ota/firmware.bin"

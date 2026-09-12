@@ -1,0 +1,21 @@
+# Name,     Type, SubType, Offset,   Size, Flags
+#
+# Two-slot OTA layout for a 4 MB flash. There is deliberately no `factory`
+# partition: both apps live in ota_0/ota_1 and the bootloader picks which to run
+# from the `otadata` partition (esp_ota / ota_data_initial.bin point at ota_0 on
+# first flash). ESP-IDF places the freshly built app in ota_0 at 0x20000 and the
+# OTA image is downloaded into the other slot at runtime.
+#
+#   nvs      0x9000  (bootloader 0x0-0x8000, partition table 0x8000-0x9000)
+#   otadata  0xf000  (8K — holds the two-slot boot selection)
+#   phy_init 0x11000
+#   ota_0    0x20000 (1700K)  — current app lands here
+#   ota_1    0x1d0000 (1700K) — OTA download target; ends at 0x380000
+#
+# Note: if you increase the bootloader size, shift these offsets so nothing
+# overlaps (the partition table must fit in 0x8000-0x9000).
+nvs,       data, nvs,     0x9000,   24K,
+otadata,   data, ota,     0xf000,   8K,
+phy_init,  data, phy,     0x11000,  4K,
+ota_0,     app,  ota_0,   0x20000,  1700K,
+ota_1,     app,  ota_1,   0x1d0000, 1700K,

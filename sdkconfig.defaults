@@ -1,0 +1,13 @@
+# Durable build config for the two-slot OTA layout.
+#
+# Merged into `sdkconfig` at configure time (the live sdkconfig is git-ignored,
+# so this is the committed source of truth for these choices). See
+# partitions.csv for the table itself.
+#
+# - Use the custom two-OTA partition table (no factory slot) at the repo root.
+# - Enable app rollback so a new image that fails to confirm itself auto-reverts
+#   to the previous app (the app calls esp_ota_mark_app_valid_cancel_rollback()
+#   on a healthy boot; the bootloader reverts if the new app dies before that).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

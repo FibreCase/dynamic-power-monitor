@@ -24,6 +24,7 @@
 
 #include "config.h"
 #include "core.h"
+#include "ota_update.h"
 
 static const char *TAG = "power-mon";
 
@@ -167,6 +168,12 @@ static void process_downstream(void) {
     uint16_t interval = s_rx[4] | (s_rx[5] << 8);
     if (cmd == 0x01 && len == 0x02)
       set_sampling_interval(interval);
+    else if (cmd == 0x02) { /* start OTA: download .bin, validate, reboot */
+      ESP_LOGI(TAG, "OTA command received (host -> start update)");
+      ota_update_start();
+    } else {
+      ESP_LOGW(TAG, "unknown downstream cmd=0x%02X len=%u (ignored)", cmd, (unsigned)len);
+    }
     memmove(s_rx, s_rx + 8, s_rxn - 8);
     s_rxn -= 8;
   }

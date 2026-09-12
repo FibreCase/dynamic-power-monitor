@@ -39,7 +39,7 @@ The build uses `-Werror`, so any warning in `main/` fails the build — keep it 
 
 ## Wire protocol (the cross-cutting contract — keep firmware, host, and web client in sync)
 
-Any change to field order, sizing, or checksum must be mirrored across the ESP32 firmware (`main/app_main.c` `send_sample`/`process_downstream`), the Python `struct.pack`/`unpack` code, and (where relevant) the WebSocket JSON shape.
+Any change to field order, sizing, or checksum must be mirrored across the ESP32 firmware (`main/net_task.c` `send_sample`/`process_downstream`), the Python `struct.pack`/`unpack` code, and (where relevant) the WebSocket JSON shape.
 
 ### Upstream sample — ESP32 → host, fixed **20 bytes**, little-endian
 | Field | Size | Type | Value |
@@ -51,14 +51,18 @@ Any change to field order, sizing, or checksum must be mirrored across the ESP32
 | Checksum | 2 | `u16` | sum of the first 18 bytes `& 0xFFFF` |
 
 ### Downstream control — host → ESP32, fixed **8 bytes**, little-endian
-Host packs it as `struct.pack('<BBBBHH', 0xBB, 0x66, 0x01, 0x02, interval_ms, checksum)`:
+Same frame shape for both commands; the `Cmd` byte selects the action. Pack with
+`struct.pack('<BBBBHH', 0xBB, 0x66, cmd, len, payload, checksum)`.
 | Field | Size | Value |
 |---|---|---|
 | Header | 2 | `0xBB 0x66` |
-| Cmd | 1 | `0x01` (set sampling interval) |
+| Cmd | 1 | `0x01` (set sampling interval) or `0x02` (start OTA) |
 | Length | 1 | `0x02` (payload length) |
-| IntervalMs | 2 | `u16` little-endian — `100` = 10 Hz, `10000` = 0.1 Hz |
+| Payload | 2 | `u16` LE — interval_ms for `cmd=0x01` (`100` = 10 Hz, `10000` = 0.1 Hz); unused (0) for `cmd=0x02` |
 | Checksum | 2 | sum of the first 6 bytes `& 0xFFFF` |
+
+- `cmd=0x01` — set the sampling interval; takes effect within ~5 ms.
+- `cmd=0x02` — **start OTA**: the firmware spawns an update task that GETs the new `.bin` over HTTP (`http://CFG_OTA_HOST_IP:CFG_OTA_HOST_PORT<CFG_OTA_URL_PATH>`), writes it to the passive OTA slot, validates, and reboots into it (see the firmware `ota_update.c` notes below). The payload field is ignored for this command.
 
 ### WebSocket broadcast — host → web client, `ws://<host>:<port>/ws`
 `{"sys_ts": <ms>, "dev_ts": <ms>, "voltage": <V>, "current": <mA>, "power": <mW>}`
@@ -78,22 +82,32 @@ a git submodule at `components/u8g2`, pinned to release `2.37.1` — see
 driver (`ssd1306.c/h`, `fonts.c`) was removed after repeated display
 corruption (missing I2C control bytes, then an addressing-mode/command
 mismatch); u8g2 owns the SSD1306 protocol now.
-- `app_main.c` — `app_main()`: NVS → I²C bus → OLED (u8g2) → INA226 → WiFi STA (block) → NTP (block) → main loop (TCP + sample + OLED).
+The firmware is split into one module per concern; `app_main.c` is only the
+composition root. Tasks run at priorities display(4) > sample(3) > net(2) =
+status(2) and share state through the mutex + length-1 sample queue in `core`.
+- `app_main.c` — composition root: NVS → status GPIO → I²C bus → OLED (u8g2) → INA226 → WiFi STA (bounded wait) → NTP (bounded wait) → `esp_ota_mark_app_valid_cancel_rollback()` (confirm the running app is workable so OTA rollback is coherent) → start the four tasks.
+- `core.{h,c}` — the **only** shared inter-task state: latest `struct reading`, sampling interval, TCP/WiFi status flags, the mutex + sample queue. Owns `set_sampling_interval()` (period **and** INA226 hardware averaging) plus the `now_ms`/`get_epoch_ms`/`is_fast_mode` helpers.
+- `net_task.c` — sole socket owner: non-blocking connect state machine (`TCP_RETRY_MS`), downstream control-frame parsing (set interval `cmd=0x01`, start OTA `cmd=0x02`), upstream sample send. `process_downstream()` reassembles sticky/partial packets and verifies the checksum.
+- `sample_task.c` — reads the INA226 on a 5 ms cadence whenever `now - last >= s_interval_ms` (a host switch to 10 Hz takes effect within ~5 ms); publishes the reading and hands it to the net task.
+- `display.c` — owns the `u8g2_t`; splash frames (boot) + live frame, redrawn every **100 ms** (`OLED_REFRESH_MS`) so it never starves I²C/TCP at 10 Hz.
+- `status.c` — status LED (no WiFi → slow blink, idle → steady, 10 Hz → fast) + INA226 ALERT pin (open-drain, debounced, logged on transition and periodically if held).
+- `wifi_ntp.c` — WiFi STA + NTP bring-up. Each boot step is bounded by a FreeRTOS **software timer + binary semaphore** (GOT_IP / the sync notification gives it on success; the timer at the deadline) — no busy-poll. On a WiFi failure it dumps a 2.4 GHz scan for diagnosis.
+- `ota_update.c` — OTA client. On downstream `cmd=0x02` it spawns a task that GETs the new `.bin` over HTTP (host from `config.h`), writes it into the **passive** OTA slot (`esp_ota_begin`/`write`/`end`), validates the image, reboots into it. Any failure aborts and leaves the running firmware untouched.
 - `ina226.{h,c}` — register-level driver. Calibrated at **10 A max** with the datasheet formula `Cal = 0.00512 / (current_LSB × R_shunt)`, `current_LSB = maxCurrent/32768`, power LSB = current_LSB × 25. **Rejects** any config where `maxCurrent × R_shunt > 81.9 mV`. `set_average()` flips the CONFIG averaging field between 64- and 512-sample windows.
-- `u8g2_esp_hal.{h,c}` — the only OLED-specific code left in this repo: bridges u8g2's byte/GPIO-delay callbacks onto the ESP-IDF `i2c_master_dev_handle_t` already set up for the OLED in `init_i2c()`, so it shares the bus like before. u8g2 itself is set up via `u8g2_Setup_ssd1306_i2c_128x32_univision_f()` (full frame-buffer variant — draw calls write into an in-memory buffer, `u8g2_SendBuffer()` flushes it). No reset/CS/DC GPIOs are wired on this breakout, so the GPIO callback only implements the delay messages.
+- `u8g2_esp_hal.{h,c}` — the only OLED-specific code in this repo: bridges u8g2's byte/GPIO-delay callbacks onto the ESP-IDF `i2c_master_dev_handle_t` set up in `init_i2c()`, so it shares the bus. u8g2 is configured via `u8g2_Setup_ssd1306_i2c_128x32_univision_f()` (full frame-buffer variant — draw calls write an in-memory buffer, `u8g2_SendBuffer()` flushes it). No reset/CS/DC GPIOs are wired, so the GPIO callback only implements delays.
 - `components/u8g2` — vendored u8g2 submodule; its own `CMakeLists.txt` already registers as an ESP-IDF component (globs `csrc/*.c`), so `main/CMakeLists.txt` just lists `u8g2` in `PRIV_REQUIRES`. Don't hand-edit files under here — update the submodule pin instead.
 
-Key invariants (all in `app_main.c` unless noted):
-- **Shared I²C bus**: INA226 (`0x40`) and SSD1306 (`0x3C`) on one bus; pins `CFG_I2C_SDA`=GPIO4 / `CFG_I2C_SCL`=GPIO5, internal pull-ups enabled.
-- **OLED anti-stutter**: `render_oled()` is capped at once per **100 ms** (`OLED_REFRESH_MS`) so it never starves I²C/TCP at 10 Hz.
-- **Clock**: SNTP via `esp_sntp_*` (server `ntp.aliyun.com`, UTC) and **blocks until synced** (`ntp_sync_block`) before sampling. `get_epoch_ms()` wraps `gettimeofday()`.
-- **TCP**: blocking socket with `TCP_NODELAY`; a small state machine (`tcp_step`) handles non-blocking connect, `poll`, and auto-reconnect every `TCP_RETRY_MS`. `process_downstream()` reassembles sticky/partial packets, verifies the checksum, and applies `IntervalMs` (updates the sampling period **and** the OLED mode label).
+Key invariants:
+- **OTA / partition table** — custom two-slot table in `partitions.csv` (no `factory`: `nvs` 0x9000, `otadata` 0xf000, `phy_init` 0x11000, `ota_0` 0x20000, `ota_1` 0x1d0000 — 1700K each). The fresh app lands in `ota_0` and the bootloader selects a slot from `otadata`. **App rollback is enabled** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` via `sdkconfig.defaults`) so a new image that fails to confirm auto-reverts to the previous one; `app_main` calls `esp_ota_mark_app_valid_cancel_rollback()` after a healthy boot to clear `PENDING_VERIFY`. The `.bin` must be < one slot (~1.65 MB; current build ~980 KB).
+- **Shared I²C bus**: INA226 (`0x40`) and SSD1306 (`0x3C`) on one bus; pins `CFG_I2C_SDA`=GPIO4 / `CFG_I2C_SCL`=GPIO5, internal pull-ups enabled (the `i2c_master` driver serialises transactions across tasks).
+- **Clock**: SNTP (default `ntp.aliyun.com`, UTC) with a bounded sync window before sampling. `get_epoch_ms()` wraps `gettimeofday()`; the sample timestamp is captured at read time, not send time.
 - **Config lives in `main/config.h`** (created from `main/config.h.example`; the real one is git-ignored because it holds WiFi creds). Edit before flashing:
   - WiFi SSID/pass, host IP/port, NTP host.
   - I²C pins `CFG_I2C_SDA`=GPIO4 / `CFG_I2C_SCL`=GPIO5 (internal pull-ups enabled).
   - `CFG_LED_PIN`=GPIO8 (push-pull, active HIGH): no WiFi → slow blink (500 ms), idle (0.1 Hz) → steady on, 10 Hz → fast blink (100 ms).
   - `CFG_ALERT_PIN`=GPIO3 (INA226 ALERT, open-drain/active-low; polled as an input, pulled up; logged on transition and periodically if held).
   - `CFG_MAX_CURRENT_A` / `CFG_SHUNT_OHM` — the shunt sets every current & power reading (10 A needs shunt ≤ 8.2 mΩ).
+  - `CFG_OTA_HOST_IP` / `CFG_OTA_HOST_PORT` / `CFG_OTA_URL_PATH` — the OTA download source `http://<ip>:<port><path>` (default: the backend host on port 8000, path `/ota/firmware.bin`).
   - GPIO18/19 are the built-in USB-Serial-JTAG — do **not** repurpose them.
 
 ### Python backend (`./python/power_monitor/`, uv-managed, Python ≥3.10)
