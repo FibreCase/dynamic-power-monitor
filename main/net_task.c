@@ -3,10 +3,12 @@
  *
  * Sole owner of the socket. Drives the non-blocking connect state machine,
  * reassembles and verifies the downstream control frames (set sampling
- * interval), and sends the upstream samples that sample_task hands it over the
- * length-1 queue. All of its socket + reassembly state is private to this file.
- * The socket is driven by poll() with timeouts, so the task parks in poll()
- * when idle and never holds the socket across a blocking delay.
+ * interval), sends the upstream samples that sample_task hands it over the
+ * length-1 queue, and sends a one-time device-info frame (running firmware
+ * version + active OTA slot) each time it (re)connects. All of its socket +
+ * reassembly state is private to this file. The socket is driven by poll() with
+ * timeouts, so the task parks in poll() when idle and never holds the socket
+ * across a blocking delay.
  */
 #include "net_task.h"
 
@@ -18,7 +20,9 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 
+#include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -34,6 +38,7 @@ static const char *TAG = "power-mon";
 
 static int s_sock = -1;
 static uint32_t s_last_tcp_try = 0;
+static bool s_info_sent = false; /* device-info frame sent for the current conn */
 
 /* Downstream reassembly (handles sticky / partial packets). */
 static uint8_t s_rx[64];
@@ -54,6 +59,7 @@ static void net_close(void) {
   s_sock = -1;
   s_tcp_state = T_DISC;
   s_rxn = 0; /* discard any partially-received downstream frame */
+  s_info_sent = false; /* re-send device info on the next (re)connect */
 }
 
 /* Drive a (re)connect to completion. Returns true and leaves
@@ -146,6 +152,43 @@ static void send_sample(const struct reading *r) {
   (void)send(s_sock, buf, sizeof(buf), 0);
 }
 
+/* --- upstream: build + send the one-time device-info frame (37 bytes) ---
+ * Reports the running firmware's version string and which OTA slot it runs
+ * from, so the dashboard can show the current firmware + active slot. Sent once
+ * per (re)connect (see the net_task loop), before the sample stream.
+ *
+ * Frame: AA 53 | 32s version (NUL-padded) | u8 slot | u16 checksum
+ *   slot: 1 = ota_0, 2 = ota_1, 0 = unknown (normalized from the partition
+ *         subtype, whose raw values are 0x10/0x11).
+ *   checksum = sum of the first 35 bytes & 0xFFFF. */
+static void send_device_info(void) {
+  if (s_sock < 0 || s_tcp_state != T_OK)
+    return;
+
+  uint8_t slot = 0;
+  const esp_partition_t *run = esp_ota_get_running_partition();
+  if (run != NULL) {
+    if (run->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0)
+      slot = 1;
+    else if (run->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1)
+      slot = 2;
+  }
+
+  uint8_t buf[37];
+  buf[0] = 0xAA;
+  buf[1] = 0x53;
+  const esp_app_desc_t *desc = esp_app_get_description();
+  memcpy(&buf[2], desc->version, 32); /* version is a 32-byte NUL-padded field */
+  buf[34] = slot;
+
+  uint16_t ck = byte_sum(buf, 35);
+  buf[35] = (uint8_t)(ck & 0xFF);
+  buf[36] = (uint8_t)(ck >> 8);
+
+  (void)send(s_sock, buf, sizeof(buf), 0);
+  ESP_LOGI(TAG, "device info sent (v%s, slot=%u)", desc->version, (unsigned)slot);
+}
+
 /* --- downstream: parse host -> ESP32 control frames (0xBB 0x66) --- */
 static void process_downstream(void) {
   for (;;) {
@@ -186,6 +229,13 @@ static void net_task(void *arg) {
     if (!ensure_connected()) {
       vTaskDelay(pdMS_TO_TICKS(50)); /* back off between retries */
       continue;
+    }
+
+    // Once per (re)connect, tell the host which firmware we're running and
+    // from which OTA slot (net_close() resets s_info_sent on every disconnect).
+    if (!s_info_sent) {
+      send_device_info();
+      s_info_sent = true;
     }
 
     struct pollfd p = {.fd = s_sock, .events = POLLIN};

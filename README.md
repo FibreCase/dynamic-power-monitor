@@ -1,4 +1,4 @@
-# 12V 供电动态采样监测系统
+# dynamic-power-monitor
 
 A 12 V power dynamic-sampling / monitoring system. An ESP32-C3 reads an INA226
 power sensor, renders the readings on a 128×32 SSD1306 OLED, and streams
