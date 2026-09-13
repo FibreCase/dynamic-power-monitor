@@ -11,3 +11,12 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# - 1 kHz tick. The default 100 Hz makes sub-10 ms delays impossible:
+#   pdMS_TO_TICKS(5) evaluates to (5 * 100) / 1000 == 0, and vTaskDelay(0) does
+#   NOT block -- it only yields. sample_task polls on a 5 ms cadence
+#   (SAMPLE_POLL_MS), so at 100 Hz it spun at its priority without ever
+#   sleeping, starving net + status (prio 2) and the IDLE task (prio 0) and
+#   tripping the task watchdog every 5 s. sample_task.c has a _Static_assert
+#   that fails the build if this ever drops below 200.
+CONFIG_FREERTOS_HZ=1000

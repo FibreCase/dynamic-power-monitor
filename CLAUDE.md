@@ -26,6 +26,8 @@ The local IDF is at `/home/fibre/.espressif/v6.0.1/esp-idf`. Export it first, th
 
 The build uses `-Werror`, so any warning in `main/` fails the build — keep it warning-free.
 
+`sdkconfig.defaults` is the committed source of truth for build config (the live `sdkconfig` is git-ignored) and — unlike what you might expect — its values **override** an existing `sdkconfig` on the next `idf.py reconfigure`/`build`, so editing it is enough. It carries the partition-table and rollback choices plus `CONFIG_FREERTOS_HZ=1000`: at the 100 Hz default, `pdMS_TO_TICKS(5)` truncates to **0** and `vTaskDelay(0)` only yields instead of blocking, so a 5 ms poll loop spins and starves the lower-priority tasks. `main/sample_task.c` has a `_Static_assert` on `configTICK_RATE_HZ` that fails the build if the tick ever drops back below 200.
+
 ### Python backend (`./python`, managed with `uv`)
 - Install/sync deps: `uv sync`
 - Run the server: `uv run uvicorn power_monitor.app:app --host 0.0.0.0 --port 8000` (or `uv run power-monitor`).
