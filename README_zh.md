@@ -149,12 +149,11 @@ cp main/config.h.example main/config.h   # 然后编辑 main/config.h（被 git 
 ```bash
 cd python
 uv sync
-uv run uvicorn power_monitor.app:app --host 0.0.0.0 --port 8000
-# 或：uv run power-monitor
+uv run power-monitor
 ```
 
-- **TCP 接收** 监听端口 `8888`（ESP32 连接到这里；把固件的 `CFG_HOST_IP`/`CFG_HOST_PORT` 指向本机）。
-- **`ws://<host>:8000/ws`** —— 实时采样广播。第一个查看者上线时设备切到 10 Hz，最后一个离开时降回 0.1 Hz。
+- **TCP 接收** 监听端口 `38888`（ESP32 连接到这里；把固件的 `CFG_HOST_IP`/`CFG_HOST_PORT` 指向本机）。
+- **`ws://<host>:38000/ws`** —— 实时采样广播。第一个查看者上线时设备切到 10 Hz，最后一个离开时降回 0.1 Hz。
 - **`GET /api/v1/history?start_ts=&end_ts=&limit=`** —— 持久化采样，按时间降序。
 - **`GET /api/v1/alerts?start_ts=&end_ts=&limit=`** —— 过流事件，按时间降序。
 - **`GET /healthz`** —— `{"status", "device": <bool>, "viewers": <int>}`。
@@ -178,7 +177,7 @@ npm run build        # 输出到 python/web/dist/，由 FastAPI 在 "/" 处托�
 
 ```bash
 cd python/web
-npm run dev          # http://localhost:5173，代理 /api、/ws、/healthz、/ota -> :8000
+npm run dev          # http://localhost:5173，代理 /api、/ws、/healthz、/ota -> :38000
 ```
 
 ## 端到端测试

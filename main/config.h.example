@@ -23,7 +23,7 @@
 #define CFG_WIFI_SSID    "CHANGE_ME_SSID"
 #define CFG_WIFI_PASS    "CHANGE_ME_PASSWORD"
 #define CFG_HOST_IP      "192.168.1.100"   // Python host
-#define CFG_HOST_PORT    8888
+#define CFG_HOST_PORT    38888
 #define CFG_NTP_HOST     "ntp.aliyun.com"  // SNTP server (UTC)
 
 // ---------------------------------------------------------------------------
@@ -77,8 +77,8 @@
 // validation. The backend must serve the new build's
 // `build/esp32-power-monitor.bin` at that path.
 //
-// Default points at the Python backend's HTTP server (port 8000, same host as
+// Default points at the Python backend's HTTP server (port 38000, same host as
 // the TCP ingest server). Adjust if you host the .bin elsewhere.
 #define CFG_OTA_HOST_IP     "192.168.1.100"
-#define CFG_OTA_HOST_PORT   8000
+#define CFG_OTA_HOST_PORT   38000
 #define CFG_OTA_URL_PATH    "/ota/firmware.bin"

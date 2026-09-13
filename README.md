@@ -154,13 +154,12 @@ moment; the two paths are distinguished by a `source` field (`device` / `host`).
 ```bash
 cd python
 uv sync
-uv run uvicorn power_monitor.app:app --host 0.0.0.0 --port 8000
-# or: uv run power-monitor
+uv run power-monitor
 ```
 
-- **TCP ingest** on port `8888` (the ESP32 connects here; point the firmware's
+- **TCP ingest** on port `38888` (the ESP32 connects here; point the firmware's
   `CFG_HOST_IP`/`CFG_HOST_PORT` at this host).
-- **`ws://<host>:8000/ws`** — live sample broadcast. The first viewer switches the
+- **`ws://<host>:38000/ws`** — live sample broadcast. The first viewer switches the
   device to 10 Hz; the last viewer leaving drops it to 0.1 Hz.
 - **`GET /api/v1/history?start_ts=&end_ts=&limit=`** — persisted samples, time-descending.
 - **`GET /api/v1/alerts?start_ts=&end_ts=&limit=`** — OCP events, time-descending.
@@ -186,7 +185,7 @@ During development, run it against a running backend with hot reload:
 
 ```bash
 cd python/web
-npm run dev          # http://localhost:5173, proxies /api, /ws, /healthz, /ota -> :8000
+npm run dev          # http://localhost:5173, proxies /api, /ws, /healthz, /ota -> :38000
 ```
 
 ## End-to-end test
