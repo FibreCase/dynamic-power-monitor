@@ -152,6 +152,47 @@ static void send_sample(const struct reading *r) {
   (void)send(s_sock, buf, sizeof(buf), 0);
 }
 
+/* --- upstream: build + send a 25-byte OCP event from the given reading ---
+ * Sent when status_task publishes an overcurrent event (INA226 ALERT edge).
+ *
+ * Frame: AA 54 | u8 type | u64 timestamp_ms | f32 voltage(V) | f32 current(mA)
+ *        | f32 power(mW) | u16 checksum (over the first 23 bytes) */
+static void send_event(const struct event *ev) {
+  if (s_sock < 0 || s_tcp_state != T_OK)
+    return;
+
+  uint8_t buf[25];
+  buf[0] = 0xAA;
+  buf[1] = 0x54;
+  buf[2] = ev->type;
+  for (int i = 0; i < 8; i++)
+    buf[3 + i] = (uint8_t)((uint64_t)ev->ts >> (8 * i)); /* u64 LE */
+
+  union {
+    float f;
+    uint8_t b[4];
+  } v = {.f = ev->v};
+  union {
+    float f;
+    uint8_t b[4];
+  } c = {.f = ev->i};
+  union {
+    float f;
+    uint8_t b[4];
+  } p = {.f = ev->p};
+  for (int i = 0; i < 4; i++) {
+    buf[11 + i] = v.b[i];
+    buf[15 + i] = c.b[i];
+    buf[19 + i] = p.b[i];
+  }
+
+  uint16_t ck = byte_sum(buf, 23);
+  buf[23] = (uint8_t)(ck & 0xFF);
+  buf[24] = (uint8_t)(ck >> 8);
+
+  (void)send(s_sock, buf, sizeof(buf), 0);
+}
+
 /* --- upstream: build + send the one-time device-info frame (37 bytes) ---
  * Reports the running firmware's version string and which OTA slot it runs
  * from, so the dashboard can show the current firmware + active slot. Sent once
@@ -266,6 +307,11 @@ static void net_task(void *arg) {
     struct reading m;
     if (xQueueReceive(s_sample_q, &m, 0) == pdTRUE)
       send_sample(&m);
+
+    // Send any discrete events (overcurrent ALERTs) status_task has queued.
+    struct event ev;
+    while (xQueueReceive(s_event_q, &ev, 0) == pdTRUE)
+      send_event(&ev);
   }
 }
 

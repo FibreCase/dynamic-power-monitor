@@ -34,3 +34,10 @@ float ina226_get_power_mw(void);
 
 /* Switch the hardware averaging window (see INA226_AVG_* above). */
 void ina226_set_average(uint8_t avg_code);
+
+/* Arm the shunt overcurrent comparator so ALERT asserts when the sampled
+ * current exceeds `threshold_a` (amperes). Writes only MAR/MCP/LAR — it never
+ * touches CAL/CONFIG, so the voltage/current/power reads are unaffected.
+ * MCP enables the shunt comparator only (bus comparator masked), default
+ * polarity (alert above threshold), non-latched (level) ALERT. */
+esp_err_t ina226_set_ocp_threshold(float threshold_a);

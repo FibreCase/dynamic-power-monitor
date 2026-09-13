@@ -12,6 +12,9 @@ static const char *TAG = "INA226";
 #define REG_CURRENT  0x04
 #define REG_CAL      0x05
 #define REG_MASK     0x06
+#define REG_ALERT    0x08   /* MAR: shunt-voltage compare threshold */
+#define REG_LAR      0x09   /* Latch Alert Response */
+#define REG_MCP      0x0A   /* Mask / Clear / Polarity */
 
 /* CONFIG bit fields. */
 #define CFG_RESET    0x8000
@@ -115,4 +118,32 @@ void ina226_set_average(uint8_t avg_code)
     if (read_reg(REG_CONFIG, &cfg) != ESP_OK) return;
     cfg = (cfg & (uint16_t)~CFG_AVG_MASK) | ((uint16_t)avg_code << CFG_AVG_SH);
     write_reg(REG_CONFIG, cfg);
+}
+
+esp_err_t ina226_set_ocp_threshold(float threshold_a)
+{
+    /* The shunt comparator compares the shunt-voltage register against MAR.
+     * Shunt voltage at the threshold = threshold_a * R_shunt. MAR counts
+     * shunt-voltage LSBs, where shuntV_LSB = 25 * current_LSB (amperes) *
+     * R_shunt (V/amp) — so R_shunt cancels and
+     *     MAR = threshold_a / (25 * current_LSB).
+     * (R_shunt cancels, so a wrong shunt can't skew the threshold; it's the
+     * current LSB — set from max_current in init — that matters.) */
+    float current_lsb = s_cur_lsb;           /* amperes per current LSB */
+    uint32_t mar = (uint32_t)llroundf(threshold_a / (25.0f * current_lsb));
+    if (mar == 0u) mar = 1u;                 /* guard: can't alert on 0 */
+
+    /* MAR, then MCP (enable shunt comparator only, alert above MAR), then
+     * LAR (0 = non-latched / level ALERT). Writes only to 0x08/0x0A/0x09 —
+     * CAL and CONFIG are untouched, so all the reads above are unaffected. */
+    esp_err_t e = write_reg(REG_ALERT, (uint16_t)mar);
+    if (e == ESP_OK) e = write_reg(REG_MCP, 0x8000);
+    if (e == ESP_OK) e = write_reg(REG_LAR, 0x0000);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "set OCP threshold failed: %s", esp_err_to_name(e));
+        return e;
+    }
+    ESP_LOGI(TAG, "OCP threshold: MAR=%u (~%.2f A, shunt-only, non-latched)",
+             (unsigned)mar, threshold_a);
+    return ESP_OK;
 }

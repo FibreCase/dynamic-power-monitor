@@ -28,6 +28,7 @@ bool s_wifi_up = false;
 bool s_wifi_disconnected = false;
 SemaphoreHandle_t s_mutex;
 QueueHandle_t s_sample_q; /* length 1: always carries only the latest sample */
+QueueHandle_t s_event_q;  /* small bounded queue of discrete events to send */
 
 /* --- Control / helpers --- */
 
@@ -37,7 +38,9 @@ esp_err_t core_init(void) {
     s_mutex = xSemaphoreCreateMutex();
   if (!s_sample_q)
     s_sample_q = xQueueCreate(1, sizeof(struct reading));
-  return (s_mutex && s_sample_q) ? ESP_OK : ESP_ERR_NO_MEM;
+  if (!s_event_q)
+    s_event_q = xQueueCreate(8, sizeof(struct event));
+  return (s_mutex && s_sample_q && s_event_q) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 // Switch the sampling period AND the INA226 hardware averaging.
@@ -79,6 +82,11 @@ void reading_get(struct reading *out) {
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   *out = s_reading;
   xSemaphoreGive(s_mutex);
+}
+
+void event_publish(const struct event *e) {
+  if (xQueueSend(s_event_q, e, 0) != pdTRUE)
+    ESP_LOGW(TAG, "event dropped: queue full");
 }
 
 bool is_fast_mode(void) {

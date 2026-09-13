@@ -67,6 +67,24 @@ no `VERSION` in `project()`, and a `v1.0.0` tag exists → `esp_app_desc_t.versi
 `v1.0.0-<N>-g<hash>`; a `-dirty` suffix appears while the tree has uncommitted changes). No build
 config is needed to make it distinct per build.
 
+### Upstream OCP event — ESP32 → host, fixed **25 bytes**, little-endian
+Sent when the INA226 **ALERT** pin asserts (shunt overcurrent, threshold `CFG_OCP_THRESHOLD_A`
+in `config.h`). This is the *hardware* overcurrent path; the backend also detects overcurrent
+host-side (see the Python section). `main/net_task.c` `send_event()`.
+| Field | Size | Type | Value |
+|---|---|---|---|
+| Header | 2 | `u8[2]` | `0xAA 0x54` |
+| Type | 1 | `u8` | `0x01` = shunt overcurrent |
+| Timestamp | 8 | `u64` | NTP-synced UTC Unix time in **milliseconds** (edge time) |
+| Voltage | 4 | `float32` IEEE 754 | bus voltage (V), fresh read at the edge |
+| Current | 4 | `float32` IEEE 754 | sampled current (**mA**) |
+| Power | 4 | `float32` IEEE 754 | power (**mW**) |
+| Checksum | 2 | `u16` | sum of the first 23 bytes `& 0xFFFF` |
+
+The firmware arms the comparator in `ina226_set_ocp_threshold()` (writes only `MAR`/`MCP`/`LAR` —
+it never touches `REG_CAL`/`REG_CONFIG`, so the voltage/current/power reads are unaffected). The
+comparator is shunt-only, non-latched (level) ALERT.
+
 ### Downstream control — host → ESP32, fixed **8 bytes**, little-endian
 Same frame shape for both commands; the `Cmd` byte selects the action. Pack with
 `struct.pack('<BBBBHH', 0xBB, 0x66, cmd, len, payload, checksum)`.
@@ -103,11 +121,11 @@ The firmware is split into one module per concern; `app_main.c` is only the
 composition root. Tasks run at priorities display(4) > sample(3) > net(2) =
 status(2) and share state through the mutex + length-1 sample queue in `core`.
 - `app_main.c` — composition root: NVS → status GPIO → I²C bus → OLED (u8g2) → INA226 → WiFi STA (bounded wait) → NTP (bounded wait) → `esp_ota_mark_app_valid_cancel_rollback()` (confirm the running app is workable so OTA rollback is coherent) → start the four tasks.
-- `core.{h,c}` — the **only** shared inter-task state: latest `struct reading`, sampling interval, TCP/WiFi status flags, the mutex + sample queue. Owns `set_sampling_interval()` (period **and** INA226 hardware averaging) plus the `now_ms`/`get_epoch_ms`/`is_fast_mode` helpers.
-- `net_task.c` — sole socket owner: non-blocking connect state machine (`TCP_RETRY_MS`), downstream control-frame parsing (set interval `cmd=0x01`, start OTA `cmd=0x02`), upstream sample send, and a one-time **device-info** send (`send_device_info()`) each (re)connect carrying the running firmware version + active OTA slot. `process_downstream()` reassembles sticky/partial packets and verifies the checksum.
+- `core.{h,c}` — the **only** shared inter-task state: latest `struct reading`, sampling interval, TCP/WiFi status flags, the mutex + sample queue, and a small bounded **event queue** (`s_event_q`) carrying discrete `struct event`s (e.g. overcurrent). Owns `set_sampling_interval()` (period **and** INA226 hardware averaging), `event_publish()`, plus the `now_ms`/`get_epoch_ms`/`is_fast_mode` helpers.
+- `net_task.c` — sole socket owner: non-blocking connect state machine (`TCP_RETRY_MS`), downstream control-frame parsing (set interval `cmd=0x01`, start OTA `cmd=0x02`), upstream sample send, a one-time **device-info** send (`send_device_info()`) each (re)connect, and an **OCP event** send (`send_event()`) drained from `s_event_q` each pass. `process_downstream()` reassembles sticky/partial packets and verifies the checksum.
 - `sample_task.c` — reads the INA226 on a 5 ms cadence whenever `now - last >= s_interval_ms` (a host switch to 10 Hz takes effect within ~5 ms); publishes the reading and hands it to the net task.
 - `display.c` — owns the `u8g2_t`; splash frames (boot) + live frame, redrawn every **100 ms** (`OLED_REFRESH_MS`) so it never starves I²C/TCP at 10 Hz.
-- `status.c` — status LED (no WiFi → slow blink, idle → steady, 10 Hz → fast) + INA226 ALERT pin (open-drain, debounced, logged on transition and periodically if held).
+- `status.c` — status LED (no WiFi → slow blink, idle → steady, 10 Hz → fast) + INA226 ALERT pin (open-drain, active-low, polled). On the ALERT rising edge it takes a fresh INA226 read and `event_publish()`es an overcurrent event for net_task to ship; also logs on transition and periodically if held.
 - `wifi_ntp.c` — WiFi STA + NTP bring-up. Each boot step is bounded by a FreeRTOS **software timer + binary semaphore** (GOT_IP / the sync notification gives it on success; the timer at the deadline) — no busy-poll. On a WiFi failure it dumps a 2.4 GHz scan for diagnosis.
 - `ota_update.c` — OTA client. On downstream `cmd=0x02` it spawns a task that GETs the new `.bin` over HTTP (host from `config.h`), writes it into the **passive** OTA slot (`esp_ota_begin`/`write`/`end`), validates the image, reboots into it. Any failure aborts and leaves the running firmware untouched.
 - `ina226.{h,c}` — register-level driver. Calibrated at **10 A max** with the datasheet formula `Cal = 0.00512 / (current_LSB × R_shunt)`, `current_LSB = maxCurrent/32768`, power LSB = current_LSB × 25. **Rejects** any config where `maxCurrent × R_shunt > 81.9 mV`. `set_average()` flips the CONFIG averaging field between 64- and 512-sample windows.

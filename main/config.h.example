@@ -55,6 +55,11 @@
 #define CFG_MAX_CURRENT_A  10.0f
 #define CFG_SHUNT_OHM      0.005f          // 5 mOhm  ->  50 mV at 10 A  (OK)
 
+// Overcurrent alert threshold (amperes). The INA226 ALERT pin asserts when the
+// sampled current exceeds this (shunt comparator); firmware pushes an event to
+// the host. Independent of CFG_MAX_CURRENT_A (which only sets full-scale).
+#define CFG_OCP_THRESHOLD_A 2.5f
+
 // ---------------------------------------------------------------------------
 // Behaviour
 // ---------------------------------------------------------------------------

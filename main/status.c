@@ -17,6 +17,7 @@
 
 #include "config.h"
 #include "core.h"
+#include "ina226.h"
 
 static const char *TAG = "power-mon";
 
@@ -63,15 +64,32 @@ static void status_task(void *arg) {
       on = true;                         /* steady on: idle */
     gpio_set_level(CFG_LED_PIN, on ? 1 : 0);
 
-    // ALERT pin.
+    // ALERT pin (open-drain, active-low). On the rising edge into asserted,
+    // take a fresh INA226 read and publish an overcurrent event for net_task to
+    // ship to the host; keep the existing held-alert log.
     int active = (gpio_get_level(CFG_ALERT_PIN) == 0) ? 1 : 0;
     if (active != s_alert_active) {
       s_alert_active = active;
       s_last_alert_log = now;
-      if (active)
-        ESP_LOGW(TAG, "INA226 ALERT asserted");
-      else
+      if (active) {
+        struct reading r = {
+            .v = ina226_get_voltage(),
+            .i = ina226_get_current_ma(),
+            .p = ina226_get_power_mw(),
+        };
+        struct event ev = {
+            .type = 0x01, /* shunt overcurrent */
+            .ts = get_epoch_ms(),
+            .v = r.v,
+            .i = r.i,
+            .p = r.p,
+        };
+        event_publish(&ev);
+        ESP_LOGW(TAG, "INA226 ALERT asserted (OCP) V=%.2f I=%.0fmA P=%.1fW -> event queued",
+                 r.v, r.i, r.p / 1000.0f);
+      } else {
         ESP_LOGI(TAG, "INA226 ALERT cleared");
+      }
     } else if (active && (now - s_last_alert_log > 10000u)) {
       struct reading r;
       reading_get(&r);

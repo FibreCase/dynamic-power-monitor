@@ -32,6 +32,17 @@ struct reading {
   float p;    /* mW */
 };
 
+/* A discrete event (e.g. an INA226 overcurrent ALERT). Published by status_task
+ * on the ALERT edge and drained/sent by net_task. `type` selects the event kind
+ * on the wire (see net_task.c / the backend protocol). */
+struct event {
+  uint8_t type; /* 0x01 = shunt overcurrent */
+  int64_t ts;   /* epoch ms, edge time */
+  float v;      /* volts, fresh read at the edge */
+  float i;      /* mA */
+  float p;      /* mW */
+};
+
 /* TCP connection state. net_task writes; display + status read (volatile). */
 enum tcp_state { T_DISC, T_OK };
 
@@ -43,6 +54,7 @@ extern bool s_wifi_up;
 extern bool s_wifi_disconnected;
 extern SemaphoreHandle_t s_mutex;  /* guards s_reading + s_interval_ms */
 extern QueueHandle_t s_sample_q;   /* latest sample: sample_task -> net_task */
+extern QueueHandle_t s_event_q;    /* discrete events: status_task -> net_task */
 
 /* --- Control / helpers (implemented in core.c) --- */
 esp_err_t core_init(void);  /* create the mutex + sample queue, before tasks */
@@ -54,6 +66,10 @@ void set_sampling_interval(uint16_t ms);
 /* Thread-safe copy of the latest reading (one writer, many readers). */
 void reading_publish(const struct reading *r);
 void reading_get(struct reading *out);
+
+/* Push a discrete event for net_task to send. Drops (with a warning) if the
+ * queue is full — events are rare, so this is a safety net, not a normal path. */
+void event_publish(const struct event *e);
 
 /* True when in "fast" (10 Hz) sampling mode. */
 bool is_fast_mode(void);
