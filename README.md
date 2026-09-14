@@ -13,7 +13,7 @@ rollback) and **overcurrent (OCP) alerting** with a web anomaly log.
 
 | Hardware | Firmware | Dashboard |
 |---|---|---|
-| ![ESP32-C3 12V monitor — assembled PCB](assets/hardware.jpg) | ESP-IDF v6.0.1 | ![12V 供电监控面板 — live view](assets/web.png) |
+| ![ESP32-C3 12V monitor — assembled PCB](assets/hardware.png) | ESP-IDF v6.0.1 | ![12V 供电监控面板 — live view](assets/web.png) |
 
 ![JLCEDA PCB render](assets/hardware_pcb.png)
 
