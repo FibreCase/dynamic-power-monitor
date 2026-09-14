@@ -12,7 +12,7 @@
 
 | 硬件 | 固件 | 监控面板 |
 |---|---|---|
-| ![ESP32-C3 12V 供电监测板 — 实物](assets/hardware.jpg) | ESP-IDF v6.0.1 | ![12V 供电监控面板 — 实时监控](assets/web.png) |
+| ![ESP32-C3 12V 供电监测板 — 实物](assets/hardware.png) | ESP-IDF v6.0.1 | ![12V 供电监控面板 — 实时监控](assets/web.png) |
 
 ![嘉立创 EDA PCB 渲染图](assets/hardware_pcb.png)
 
