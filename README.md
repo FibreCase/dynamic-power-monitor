@@ -37,9 +37,9 @@ Three independent components:
 
 ```
 ┌─────────────┐  TCP 20-byte samples / 25-byte OCP events   ┌──────────────────────┐
-│  ESP32-C3   │ ───────────────────────────────────────────▶│   Python backend     │
-│  + INA226   │ ◀─────────────────────────────────────────── │  (FastAPI, SQLite)   │
-└─────────────┘   8-byte control frames (interval / OTA)     └──────────┬───────────┘
+│  ESP32-C3   │ ──────────────────────────────────────────▶│   Python backend     │
+│  + INA226   │ ◀───────────────────────────────────────── │  (FastAPI, SQLite)   │
+└─────────────┘   8-byte control frames (interval / OTA)    └──────────┬───────────┘
         │   OLED (local display)                                        │
         │                                                               │ WS (live) + HTTP (history/OTA/OCP)
         └──────────────────────────────────────────────▶  browser dashboard (React/Vite/ECharts)
