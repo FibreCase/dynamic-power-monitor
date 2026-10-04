@@ -13,7 +13,7 @@ rollback) and **overcurrent (OCP) alerting** with a web anomaly log.
 
 | Hardware | Firmware | Dashboard |
 |---|---|---|
-| ![ESP32-C3 12V monitor — assembled PCB](assets/hardware.png) | ESP-IDF v6.0.1 | ![12V 供电监控面板 — live view](assets/web.png) |
+| ![ESP32-C3 12V monitor — assembled PCB](assets/hardware.png) | ESP-IDF v6.0.1 | ![12V power monitor dashboard — live view](assets/web.png) |
 
 ![JLCEDA PCB render](assets/hardware_pcb.png)
 
@@ -22,10 +22,11 @@ rollback) and **overcurrent (OCP) alerting** with a web anomaly log.
 - **Live power telemetry** — bus voltage (V), current (A), and power (W) at up to **10 Hz** while watched, dropping to **0.1 Hz** idle to save power/traffic.
 - **Chip temperature** — the ESP32-C3's internal (die) temperature rides along with every sample and is charted separately on the dashboard.
 - **On-board display** — 128×32 SSD1306 OLED (u8g2) shows power / voltage / link status on the device itself.
-- **Browser dashboard** — four tabs: **实时监控** (live chart), **历史查询** (history), **异常日志** (anomaly/OCP log), **固件更新** (OTA).
+- **Browser dashboard** — four tabs: **Live** (live chart), **History** (query by time range), **Alerts** (anomaly/OCP log), **Firmware** (OTA).
+- **Bilingual UI** — English by default (中文 when the browser is Chinese), switchable from the header; the choice is remembered.
 - **SQLite history** — every sample is persisted; query by time range.
 - **OTA updates** — flash new firmware over the air into the second slot, with automatic rollback if the new image fails to boot.
-- **Overcurrent alerting** — two independent detectors (the INA226 **ALERT** pin *and* a backend threshold) log the event time + voltage/current/power; browse them in **异常日志**.
+- **Overcurrent alerting** — two independent detectors (the INA226 **ALERT** pin *and* a backend threshold) log the event time + voltage/current/power; browse them in **Alerts**.
 - **Adaptive sampling** — the device bumps to 10 Hz only when a dashboard viewer is connected, and back to 0.1 Hz when the last viewer leaves.
 
 ## Architecture
@@ -133,13 +134,13 @@ healthy boot. Keep the `.bin` well under one slot (~1.65 MB; the current build i
 
 **To publish an update** (dashboard-driven):
 1. `idf.py build` → `build/esp32-power-monitor.bin`.
-2. Dashboard → **固件更新** → choose the `.bin` ("选择 .bin 固件") — it uploads to the backend (`POST /ota/upload`) and is served at `/ota/firmware.bin`.
-3. Click **推送到设备**. The backend sends the OTA command over TCP; the device downloads and reboots. The button is enabled only when a firmware is uploaded *and* the device is online.
+2. Dashboard → **Firmware** → choose the `.bin` (“Choose .bin firmware”) — it uploads to the backend (`POST /ota/upload`) and is served at `/ota/firmware.bin`.
+3. Click **Push to device**. The backend sends the OTA command over TCP; the device downloads and reboots. The button is enabled only when a firmware is uploaded *and* the device is online.
 
 ## Overcurrent (OCP) alerting
 
 Two independent detectors record overcurrent events to the backend, and both are
-viewable in the dashboard's **异常日志** tab:
+viewable in the dashboard's **Alerts** tab:
 
 - **Device (hardware)** — the INA226's **ALERT** comparator asserts when the
   current exceeds `CFG_OCP_THRESHOLD_A` (default 2.5 A). On the rising edge the
@@ -172,8 +173,8 @@ Configuration is via `PM_*` environment variables — see [`python/README.md`](p
 ## Dashboard
 
 A React + Vite + ECharts single-page app (`python/web/`) with four tabs —
-**实时监控** (live chart), **历史查询** (history), **异常日志** (OCP log), and
-**固件更新** (OTA). It's served by the backend itself, same-origin, so no
+**Live** (live chart), **History** (query by time range), **Alerts** (OCP log), and
+**Firmware** (OTA). It's served by the backend itself, same-origin, so no
 separate process or CORS is needed in production.
 
 ```bash
