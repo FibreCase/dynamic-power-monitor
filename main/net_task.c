@@ -120,13 +120,16 @@ static bool ensure_connected(void) {
   return false;
 }
 
-/* --- upstream: build + send a 20-byte sample from the given reading --- */
+/* --- upstream: build + send a 24-byte sample from the given reading ---
+ *
+ * Frame: AA 55 | u64 timestamp_ms | f32 voltage(V) | f32 current(mA)
+ *        | f32 die_temp(C) | u16 checksum (over the first 22 bytes) */
 static void send_sample(const struct reading *r) {
   if (s_sock < 0 || s_tcp_state != T_OK)
     return;
 
   int64_t ts = r->ts; /* captured at read time by sample_task */
-  uint8_t buf[20];
+  uint8_t buf[24];
   buf[0] = 0xAA;
   buf[1] = 0x55;
   for (int i = 0; i < 8; i++)
@@ -140,14 +143,19 @@ static void send_sample(const struct reading *r) {
     float f;
     uint8_t b[4];
   } c = {.f = r->i};
+  union {
+    float f;
+    uint8_t b[4];
+  } t = {.f = r->t};
   for (int i = 0; i < 4; i++) {
     buf[10 + i] = v.b[i];
     buf[14 + i] = c.b[i];
+    buf[18 + i] = t.b[i];
   }
 
-  uint16_t ck = byte_sum(buf, 18);
-  buf[18] = (uint8_t)(ck & 0xFF);
-  buf[19] = (uint8_t)(ck >> 8);
+  uint16_t ck = byte_sum(buf, 22);
+  buf[22] = (uint8_t)(ck & 0xFF);
+  buf[23] = (uint8_t)(ck >> 8);
 
   (void)send(s_sock, buf, sizeof(buf), 0);
 }

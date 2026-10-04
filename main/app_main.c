@@ -2,7 +2,7 @@
  * 12V 供电动态采样监测系统 — ESP32-C3 firmware (ESP-IDF)
  *
  * Reads the INA226 power sensor, renders it on a 128x32 SSD1306 OLED, and
- * streams fixed 20-byte samples over a long-lived TCP connection to the
+ * streams fixed 24-byte samples over a long-lived TCP connection to the
  * Python host. Host -> ESP32 control frames (set sampling interval) are parsed
  * from the same connection and take effect immediately.
  *
@@ -17,6 +17,7 @@
  *   status.c       status LED + INA226 ALERT pin + status task
  *   wifi_ntp.c     WiFi STA + NTP bring-up (semaphore-bounded waits)
  *   ina226.c       register-level INA226 driver
+ *   temp_sensor.c  ESP32-C3 internal (die) temperature sensor
  *   u8g2_esp_hal.c u8g2 <-> ESP-IDF I2C bridge
  *
  * app_main order: NVS -> status GPIO -> I2C -> OLED -> INA226 -> WiFi -> NTP ->
@@ -26,9 +27,10 @@
  * serialises transactions, so the display and sample tasks may share the bus.
  *
  * Wire protocol (keep in sync with the Python backend, see TASK.md):
- *   Upstream  (20 bytes, packed, little-endian):
- *     AA 55 | u64 timestamp_ms | f32 voltage(V) | f32 current(mA) | u16 checksum
- *     checksum = sum of the first 18 bytes & 0xFFFF
+ *   Upstream  (24 bytes, packed, little-endian):
+ *     AA 55 | u64 timestamp_ms | f32 voltage(V) | f32 current(mA)
+ *           | f32 die_temp(C) | u16 checksum
+ *     checksum = sum of the first 22 bytes & 0xFFFF
  *   Downstream (8 bytes, packed, little-endian):
  *     BB 66 | u8 cmd=0x01 | u8 len=0x02 | u16 interval_ms | u16 checksum
  *     checksum = sum of the first 6 bytes & 0xFFFF
@@ -40,6 +42,7 @@
 #include "net_task.h"
 #include "sample_task.h"
 #include "status.h"
+#include "temp_sensor.h"
 #include "u8g2_esp_hal.h"
 #include "wifi_ntp.h"
 
@@ -122,6 +125,11 @@ void app_main(void) {
     if (oe != ESP_OK)
       ESP_LOGW(TAG, "INA226 OCP threshold not set: %s", esp_err_to_name(oe));
   }
+
+  // Internal die-temperature sensor. Best effort: if it fails to come up the
+  // samples simply carry NAN and the dashboard shows no temperature.
+  if (temp_sensor_init() != ESP_OK)
+    ESP_LOGW(TAG, "internal temp sensor unavailable");
 
   // WiFi: block for the connect window (GOT_IP or 20 s); on failure the module
   // runs the 2.4 GHz scan diagnostic and shows "WiFi FAIL".

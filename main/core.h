@@ -30,6 +30,7 @@ struct reading {
   float v;    /* volts */
   float i;    /* mA */
   float p;    /* mW */
+  float t;    /* ESP32-C3 die temperature, degC (NAN if unavailable) */
 };
 
 /* A discrete event (e.g. an INA226 overcurrent ALERT). Published by status_task

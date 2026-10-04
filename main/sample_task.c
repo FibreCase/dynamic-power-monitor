@@ -15,6 +15,7 @@
 
 #include "core.h"
 #include "ina226.h"
+#include "temp_sensor.h"
 
 #define STACK_SAMPLE 3072
 #define PRIO_SAMPLE 3
@@ -52,6 +53,7 @@ static void sample_task(void *arg) {
         .v = ina226_get_voltage(),
         .i = ina226_get_current_ma(),
         .p = ina226_get_power_mw(),
+        .t = temp_sensor_read_celsius(),
     };
     r.ts = get_epoch_ms(); /* stamp at read time */
 

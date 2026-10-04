@@ -20,6 +20,7 @@ rollback) and **overcurrent (OCP) alerting** with a web anomaly log.
 ## Features
 
 - **Live power telemetry** — bus voltage (V), current (A), and power (W) at up to **10 Hz** while watched, dropping to **0.1 Hz** idle to save power/traffic.
+- **Chip temperature** — the ESP32-C3's internal (die) temperature rides along with every sample and is charted separately on the dashboard.
 - **On-board display** — 128×32 SSD1306 OLED (u8g2) shows power / voltage / link status on the device itself.
 - **Browser dashboard** — four tabs: **实时监控** (live chart), **历史查询** (history), **异常日志** (anomaly/OCP log), **固件更新** (OTA).
 - **SQLite history** — every sample is persisted; query by time range.
@@ -31,12 +32,12 @@ rollback) and **overcurrent (OCP) alerting** with a web anomaly log.
 
 Three independent components:
 
-1. **Firmware** (repo root, `main/`) — ESP32-C3, ESP-IDF (C), target `esp32c3`. Reads the INA226 over I²C, drives the OLED, and owns the TCP connection.
+1. **Firmware** (repo root, `main/`) — ESP32-C3, ESP-IDF (C), target `esp32c3`. Reads the INA226 over I²C and the chip's internal temperature sensor, drives the OLED, and owns the TCP connection.
 2. **Backend** (`python/`, a git **submodule**) — Python (`uv`), FastAPI + async TCP ingest + SQLite persistence + WebSocket/HTTP APIs.
 3. **Dashboard** (`python/web/`) — React + Vite + ECharts single-page app, built to static assets and served by the backend itself (same-origin, no CORS).
 
 ```
-┌─────────────┐  TCP 20-byte samples / 25-byte OCP events   ┌──────────────────────┐
+┌─────────────┐  TCP 24-byte samples / 25-byte OCP events   ┌──────────────────────┐
 │  ESP32-C3   │ ──────────────────────────────────────────▶│   Python backend     │
 │  + INA226   │ ◀───────────────────────────────────────── │  (FastAPI, SQLite)   │
 └─────────────┘   8-byte control frames (interval / OTA)    └──────────┬───────────┘
