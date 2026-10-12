@@ -56,7 +56,7 @@ static uint8_t u8x8_byte_esp_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, voi
     return 1;
 }
 
-/* GPIO/delay shim. This 0.91" breakout has no reset/CS/DC pins wired (I2C
+/* GPIO/delay shim. This I2C OLED has no reset/CS/DC pins wired (I2C
  * only, control-byte addressed), so every GPIO message is a no-op — only
  * the delay messages u8g2 needs during init/refresh are implemented. */
 static uint8_t u8x8_gpio_and_delay_esp(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
@@ -82,9 +82,8 @@ static uint8_t u8x8_gpio_and_delay_esp(u8x8_t *u8x8, uint8_t msg, uint8_t arg_in
 void u8g2_esp_hal_init(u8g2_t *u8g2, i2c_master_dev_handle_t dev)
 {
     s_oled_dev = dev;
-    // U8G2_R2 = 180 deg rotation: this panel is mounted/wired upside down
-    // relative to u8g2's default orientation.
-    u8g2_Setup_ssd1306_i2c_128x32_univision_f(u8g2, U8G2_R2,
+    // Default orientation (0 degrees).
+    u8g2_Setup_ssd1306_i2c_128x64_noname_f(u8g2, U8G2_R0,
                                                u8x8_byte_esp_i2c,
                                                u8x8_gpio_and_delay_esp);
 

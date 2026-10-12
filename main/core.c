@@ -1,12 +1,4 @@
-/*
- * core.c — shared inter-task state & control (see core.h).
- *
- * Owns the small set of state the FreeRTOS tasks share: the latest reading,
- * the sampling interval (plus the set_sampling_interval() command that also
- * flips the INA226 hardware averaging), the TCP/WiFi status flags, and the
- * synchronization primitives (mutex + length-1 sample queue) that keep them
- * safe.
- */
+/* Shared readings, sampling interval and WiFi state. */
 #include "core.h"
 
 #include <sys/time.h>
@@ -23,12 +15,9 @@ static const char *TAG = "power-mon";
 /* --- Shared state --- */
 struct reading s_reading;
 uint32_t s_interval_ms = DEFAULT_INTERVAL_MS;
-volatile enum tcp_state s_tcp_state = T_DISC;
 bool s_wifi_up = false;
 bool s_wifi_disconnected = false;
 SemaphoreHandle_t s_mutex;
-QueueHandle_t s_sample_q; /* length 1: always carries only the latest sample */
-QueueHandle_t s_event_q;  /* small bounded queue of discrete events to send */
 
 /* --- Control / helpers --- */
 
@@ -36,11 +25,7 @@ QueueHandle_t s_event_q;  /* small bounded queue of discrete events to send */
 esp_err_t core_init(void) {
   if (!s_mutex)
     s_mutex = xSemaphoreCreateMutex();
-  if (!s_sample_q)
-    s_sample_q = xQueueCreate(1, sizeof(struct reading));
-  if (!s_event_q)
-    s_event_q = xQueueCreate(8, sizeof(struct event));
-  return (s_mutex && s_sample_q && s_event_q) ? ESP_OK : ESP_ERR_NO_MEM;
+  return s_mutex ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 // Switch the sampling period AND the INA226 hardware averaging.
@@ -50,7 +35,7 @@ void set_sampling_interval(uint16_t ms) {
 
   // Flip the INA226 averaging to match the period (64 when fast, 512 when
   // slow) — an I2C op, done outside the lock.
-  if (ms <= 1000)
+  if (ms <= NORMAL_INTERVAL_MS)
     ina226_set_average(INA226_AVG_64);
   else
     ina226_set_average(INA226_AVG_512);
@@ -60,10 +45,10 @@ void set_sampling_interval(uint16_t ms) {
   xSemaphoreGive(s_mutex);
 
   char mode[8];
-  if (ms == FAST_INTERVAL_MS)
+  if (ms == NORMAL_INTERVAL_MS)
     snprintf(mode, sizeof(mode), "10Hz");
-  else if (ms == DEFAULT_INTERVAL_MS)
-    snprintf(mode, sizeof(mode), "0.1Hz");
+  else if (ms == SLOW_INTERVAL_MS)
+    snprintf(mode, sizeof(mode), "1Hz");
   else
     snprintf(mode, sizeof(mode), "%ums", (unsigned)ms);
   ESP_LOGI(TAG, "sampling interval -> %u ms (%s)", (unsigned)ms, mode);
@@ -82,18 +67,6 @@ void reading_get(struct reading *out) {
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   *out = s_reading;
   xSemaphoreGive(s_mutex);
-}
-
-void event_publish(const struct event *e) {
-  if (xQueueSend(s_event_q, e, 0) != pdTRUE)
-    ESP_LOGW(TAG, "event dropped: queue full");
-}
-
-bool is_fast_mode(void) {
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  bool fast = (s_interval_ms <= 1000u);
-  xSemaphoreGive(s_mutex);
-  return fast;
 }
 
 uint32_t now_ms(void) {

@@ -1,5 +1,53 @@
 # 12V Power Monitor (dynamic-power-monitor)
 
+## Current `5v` firmware
+
+Normal sampling is 10 Hz (default); slow sampling is 1 Hz. The OLED shows the
+rate. The LED stays on while WiFi is connected and off while disconnected.
+
+The current board uses a 128×64 SSD1306 I²C OLED (0x3C, 0° rotation).
+Power appears above voltage/current, with WiFi and sampling status at the bottom.
+
+The firmware now runs standalone: TCP host communication, remote sampling commands,
+and sample/OCP uploads have been removed. Sampling, OLED, WiFi/NTP and local OCP
+logs remain. The Python submodule is retained as legacy tooling; the dashboard
+and protocol descriptions below refer to the previous firmware.
+
+Configure `CFG_OTA_URL` in `main/config.h` with the fixed firmware `.bin` URL.
+The HTTP API listens on port 80. Trigger an asynchronous download with:
+
+```sh
+curl -X POST http://DEVICE_IP/api/ota/update
+```
+
+Override the download URL for this update only (without changing `CFG_OTA_URL`):
+
+```sh
+curl -X POST -G \
+  --data-urlencode 'url=http://192.168.1.100:8000/firmware.bin' \
+  'http://espressif.lan/api/ota/update'
+```
+
+`-X POST` selects POST, `-G` places parameters in the query string, and
+`--data-urlencode` escapes special characters such as `?` and `&` in the firmware
+URL. Lowercase `-x` specifies a proxy. Opening the endpoint in a browser sends
+GET and returns 405.
+
+The optional `url` supports HTTP/HTTPS and at most 255 decoded bytes. Omitting
+it uses `CFG_OTA_URL`. Empty URLs, malformed encoding, unsupported schemes and
+oversized parameters return 400.
+
+| HTTP status | JSON response | Meaning |
+|---|---|---|
+| 202 | `{"status":"update_started"}` | Update task started |
+| 400 | `{"error":"invalid_ota_url"}` | Invalid URL parameter |
+| 409 | `{"error":"update_in_progress"}` | An update is already running |
+| 503 | `{"error":"update_start_failed"}` | Update task could not start |
+
+202 acknowledges startup only. Download results are logged locally.
+Successful validation switches OTA slots and reboots; failures retain the current
+firmware. Use a new firmware version; identical versions are rejected.
+
 [English](README.md) | [中文](README_zh.md)
 
 A real-time **12 V supply / power distribution monitor** built around an

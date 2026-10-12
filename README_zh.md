@@ -1,5 +1,50 @@
 # 12V 供电动态采样监测系统（dynamic-power-monitor）
 
+## 当前 `5v` 固件
+
+正常采样为 10Hz（默认），慢速采样为 1Hz，屏幕显示当前频率。
+LED 在 WiFi 连接时常亮、断开时熄灭，不再闪烁。
+
+当前板子使用 128×64 SSD1306 I²C OLED（地址 0x3C，旋转 0°）。
+上方显示功率，中间显示电压/电流，底部显示 WiFi 状态及采样模式。
+
+固件已改为独立运行：移除了上位机 TCP 通信、远程采样控制和采样/过流事件上传。
+保留本地采样、OLED、WiFi/NTP 和过流日志。Python 子模块保留为旧版工具；
+下方的上位机面板和通信协议说明适用于旧版固件。
+
+在 `main/config.h` 中设置固定固件下载地址 `CFG_OTA_URL`（完整 `.bin` URL）。
+设备 HTTP API 监听 80 端口，无需请求体：
+
+```sh
+curl -X POST http://设备IP/api/ota/update
+```
+
+指定本次升级的下载地址（不修改 `CFG_OTA_URL`）：
+
+```sh
+curl -X POST -G \
+  --data-urlencode 'url=http://192.168.1.100:8000/firmware.bin' \
+  'http://espressif.lan/api/ota/update'
+```
+
+`-X POST` 使用 POST 方法，`-G` 将参数放入查询字符串，`--data-urlencode`
+负责 URL 编码，可正确处理固件地址中的 `?`、`&` 等字符。
+不要使用小写 `-x`，它用于指定代理。直接在浏览器地址栏打开接口会发送 GET，返回 405。
+
+`url` 支持 HTTP/HTTPS，解码后最多 255 字节。省略参数时使用 `CFG_OTA_URL`；
+空地址、非法编码、非 HTTP/HTTPS 地址或超长参数返回 400。
+
+| HTTP 状态 | JSON 响应 | 含义 |
+|---|---|---|
+| 202 | `{"status":"update_started"}` | 升级任务已启动 |
+| 400 | `{"error":"invalid_ota_url"}` | URL 参数无效 |
+| 409 | `{"error":"update_in_progress"}` | 已有升级正在进行 |
+| 503 | `{"error":"update_start_failed"}` | 无法创建升级任务 |
+
+202 仅表示任务启动，不代表升级完成。下载结果通过本地日志查看。
+固件校验成功后切换 OTA 槽并重启，失败继续运行当前固件。
+新固件须使用不同版本号，同版本会被拒绝。
+
 [English](README.md) | [中文](README_zh.md)
 
 基于 **ESP32-C3** 的 **12 V 供电 / 电源分配实时监测**系统。固件读取 **INA226**

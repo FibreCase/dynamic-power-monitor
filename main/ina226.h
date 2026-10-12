@@ -13,7 +13,7 @@
 #include "esp_err.h"
 #include "driver/i2c_master.h"
 
-#define INA226_ADDR  0x40
+#define INA226_ADDR  0x4F
 
 /* Averaging field codes (CONFIG bits [11:9]): 1,4,16,64,128,256,512,1024. */
 #define INA226_AVG_64   3

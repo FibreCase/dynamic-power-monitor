@@ -81,7 +81,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id,
                           void *data) {
   (void)arg;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    // Link lost; the STA retries automatically. LED drops to slow blink.
+    // Link lost; the STA retries automatically. LED turns off.
     const wifi_event_sta_disconnected_t *d = data;
     s_wifi_disconnected = true;
     ESP_LOGW(TAG, "WiFi disconnected: reason=%u (%s)", d->reason,

@@ -5,7 +5,7 @@
  *   1. Picks the passive OTA slot (the one we are NOT running from).
  *   2. Refuses if the running app is still awaiting first-boot confirmation
  *      (PENDING_VERIFY) — you can't stack an OTA on top of an unconfirmed one.
- *   3. GETs the new .bin over HTTP (host address from config.h), checking the
+ *   3. GETs the new .bin over HTTP (fixed URL from config.h), checking the
  *      Content-Length fits the slot and that we aren't re-flashing the same
  *      version.
  *   4. Streams it into the passive slot with esp_ota_write (incremental erase),
@@ -15,13 +15,14 @@
  *      firmware untouched and the device online.
  *
  * The download runs on its own task; the running app (and the sample / display
- * / net tasks) keep running throughout — esp_ota only ever erases/writes the
+ * / status tasks) keep running throughout — esp_ota only ever erases/writes the
  * passive slot. Flash erase/write on the single-core C3 briefly stalls the CPU
  * per 4 KB block, so the UI may hiccup for a moment but the app does not crash.
  */
 #include "ota_update.h"
 
 #include <errno.h>
+#include <stdatomic.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +31,7 @@
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -44,10 +46,13 @@ static const char *TAG = "ota";
 #define OTA_READ_BUF   4096
 #define HTTP_TIMEOUT_MS 15000
 
-/* Build the OTA URL from config: http://<host>:<port><path> */
-static void ota_url(char *buf, size_t len) {
-  snprintf(buf, len, "http://%s:%u%s", CFG_OTA_HOST_IP, (unsigned)CFG_OTA_HOST_PORT,
-           CFG_OTA_URL_PATH);
+static char s_update_url[OTA_URL_MAX_LEN];
+
+static atomic_bool s_updating = ATOMIC_VAR_INIT(false);
+
+static void ota_task_finish(void) {
+  atomic_store(&s_updating, false);
+  vTaskDelete(NULL);
 }
 
 static void ota_update_task(void *arg) {
@@ -56,7 +61,7 @@ static void ota_update_task(void *arg) {
   const esp_partition_t *target = esp_ota_get_next_update_partition(running);
   if (running == NULL || target == NULL) {
     ESP_LOGE(TAG, "could not resolve running/update partition — no OTA");
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
   ESP_LOGI(TAG, "OTA: running %s @0x%" PRIx32 ", update -> %s @0x%" PRIx32,
@@ -70,15 +75,16 @@ static void ota_update_task(void *arg) {
       run_state == ESP_OTA_IMG_PENDING_VERIFY) {
     ESP_LOGE(TAG, "OTA aborted: running app is still PENDING_VERIFY (confirm it "
                   "before updating)");
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
 
   // --- Set up the HTTP client ---
-  char url[128];
-  ota_url(url, sizeof(url));
   esp_http_client_config_t cfg = {
-      .url = url,
+      .url = s_update_url,
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+      .crt_bundle_attach = esp_crt_bundle_attach,
+#endif
       .timeout_ms = HTTP_TIMEOUT_MS,
       .buffer_size = OTA_READ_BUF,
       .method = HTTP_METHOD_GET,
@@ -86,24 +92,31 @@ static void ota_update_task(void *arg) {
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (client == NULL) {
     ESP_LOGE(TAG, "OTA: http client init failed");
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
   if (esp_http_client_open(client, 0) != ESP_OK) {
     ESP_LOGE(TAG, "OTA: http open failed (status %d)",
              esp_http_client_get_status_code(client));
     esp_http_client_cleanup(client);
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
-  esp_http_client_fetch_headers(client);
+  int64_t headers = esp_http_client_fetch_headers(client);
+  int status = esp_http_client_get_status_code(client);
+  if (headers < 0 || status != 200) {
+    ESP_LOGE(TAG, "OTA: invalid HTTP response (%d)", status);
+    esp_http_client_cleanup(client);
+    ota_task_finish();
+    return;
+  }
   int64_t content_len = esp_http_client_get_content_length(client);
   if (content_len > 0 && content_len > (int64_t)target->size) {
     ESP_LOGE(TAG, "OTA: image (%lld bytes) does not fit slot (%" PRIu32
                  " bytes) — aborting",
              (long long)content_len, (uint32_t)target->size);
     esp_http_client_cleanup(client);
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
 
@@ -114,7 +127,7 @@ static void ota_update_task(void *arg) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "OTA: esp_ota_begin failed (%s)", esp_err_to_name(err));
     esp_http_client_cleanup(client);
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
 
@@ -122,6 +135,7 @@ static void ota_update_task(void *arg) {
   bool version_checked = false;
   bool fail = false;
   for (;;) {
+    errno = 0;
     int n = esp_http_client_read(client, (char *)buf, OTA_READ_BUF);
     if (n < 0) {
       ESP_LOGE(TAG, "OTA: read error (%d)", n);
@@ -164,9 +178,9 @@ static void ota_update_task(void *arg) {
         fail = true;
         break;
       }
-      if (esp_http_client_is_complete_data_received(client)) {
-        break; // clean EOF
-      }
+      if (!esp_http_client_is_complete_data_received(client))
+        fail = true;
+      break;
     }
   }
   // Capture transfer completeness before we free the client (cleanup invalidates
@@ -177,14 +191,14 @@ static void ota_update_task(void *arg) {
   if (fail) {
     esp_ota_abort(handle);
     ESP_LOGE(TAG, "OTA: aborted — device keeps running %s", running->label);
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
   if (!complete || (content_len > 0 && total != (size_t)content_len)) {
     ESP_LOGE(TAG, "OTA: incomplete download (got %zu of %lld bytes) — aborting", total,
              (long long)content_len);
     esp_ota_abort(handle);
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
 
@@ -194,7 +208,7 @@ static void ota_update_task(void *arg) {
     ESP_LOGE(TAG, "OTA: esp_ota_end failed (%s)%s — keeping current firmware",
              esp_err_to_name(err),
              err == ESP_ERR_OTA_VALIDATE_FAILED ? " (image invalid/corrupt)" : "");
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
 
@@ -202,7 +216,7 @@ static void ota_update_task(void *arg) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "OTA: set_boot_partition failed (%s) — keeping current firmware",
              esp_err_to_name(err));
-    vTaskDelete(NULL);
+    ota_task_finish();
     return;
   }
 
@@ -213,7 +227,29 @@ static void ota_update_task(void *arg) {
   // not reached
 }
 
-void ota_update_start(void) {
-  ESP_LOGI(TAG, "OTA: starting update task");
-  xTaskCreate(ota_update_task, "ota", OTA_TASK_STACK, NULL, OTA_TASK_PRIO, NULL);
+esp_err_t ota_update_start(const char *url) {
+  if (!url)
+    url = CFG_OTA_URL;
+  size_t length = strnlen(url, OTA_URL_MAX_LEN);
+  const char *host = NULL;
+  if (strncmp(url, "http://", 7) == 0)
+    host = url + 7;
+  else if (strncmp(url, "https://", 8) == 0)
+    host = url + 8;
+  if (!host || !*host || *host == '/' || *host == '?' || *host == '#' ||
+      length >= OTA_URL_MAX_LEN)
+    return ESP_ERR_INVALID_ARG;
+  for (size_t i = 0; i < length; ++i)
+    if ((unsigned char)url[i] <= 32 || (unsigned char)url[i] == 127)
+      return ESP_ERR_INVALID_ARG;
+  bool expected = false;
+  if (!atomic_compare_exchange_strong(&s_updating, &expected, true))
+    return ESP_ERR_INVALID_STATE;
+  memcpy(s_update_url, url, length + 1);
+  if (xTaskCreate(ota_update_task, "ota", OTA_TASK_STACK, NULL,
+                  OTA_TASK_PRIO, NULL) != pdPASS) {
+    atomic_store(&s_updating, false);
+    return ESP_ERR_NO_MEM;
+  }
+  return ESP_OK;
 }

@@ -9,7 +9,7 @@
  * this `.example` file.
  *
  * The values below are safe defaults / placeholders. In practice you usually
- * only need to change the WiFi SSID/password, the host IP/port, and (if your
+ * only need to change the WiFi SSID/password, the firmware URL, and (if your
  * board differs) the GPIO pins and shunt calibration.
  */
 
@@ -22,8 +22,6 @@
 // ---------------------------------------------------------------------------
 #define CFG_WIFI_SSID    "CHANGE_ME_SSID"
 #define CFG_WIFI_PASS    "CHANGE_ME_PASSWORD"
-#define CFG_HOST_IP      "192.168.1.100"   // Python host
-#define CFG_HOST_PORT    38888
 #define CFG_NTP_HOST     "ntp.aliyun.com"  // SNTP server (UTC)
 
 // ---------------------------------------------------------------------------
@@ -32,13 +30,8 @@
 #define CFG_I2C_SDA      GPIO_NUM_4
 #define CFG_I2C_SCL      GPIO_NUM_5
 
-// Status LED: push-pull, active HIGH (high = lit).
-//   no WiFi      -> slow blink (500 ms)
-//   idle (0.1Hz) -> steady on
-//   fast (10 Hz) -> fast blink (100 ms)
+// Status LED: active HIGH; on when WiFi is connected, off otherwise.
 #define CFG_LED_PIN      GPIO_NUM_8
-#define CFG_LED_SLOW_MS  500u
-#define CFG_LED_FAST_MS  100u
 
 // INA226 ALERT pin (open-drain, active low). Monitored as a polled input.
 #define CFG_ALERT_PIN    GPIO_NUM_3
@@ -56,29 +49,19 @@
 #define CFG_SHUNT_OHM      0.005f          // 5 mOhm  ->  50 mV at 10 A  (OK)
 
 // Overcurrent alert threshold (amperes). The INA226 ALERT pin asserts when the
-// sampled current exceeds this (shunt comparator); firmware pushes an event to
-// the host. Independent of CFG_MAX_CURRENT_A (which only sets full-scale).
+// sampled current exceeds this (shunt comparator); firmware logs the alert locally. Independent of CFG_MAX_CURRENT_A (which only sets full-scale).
 #define CFG_OCP_THRESHOLD_A 2.5f
 
 // ---------------------------------------------------------------------------
 // Behaviour
 // ---------------------------------------------------------------------------
-#define DEFAULT_INTERVAL_MS 10000u   // 0.1 Hz idle
-#define FAST_INTERVAL_MS    100u     // 10 Hz
+#define NORMAL_INTERVAL_MS  100u     // 10 Hz
+#define SLOW_INTERVAL_MS    1000u    // 1 Hz
+#define DEFAULT_INTERVAL_MS NORMAL_INTERVAL_MS
 #define OLED_REFRESH_MS     100u     // hard cap: never faster
-#define TCP_RETRY_MS        2000u    // reconnect period
 
 // ---------------------------------------------------------------------------
 // OTA (over-the-air update)
 // ---------------------------------------------------------------------------
-// When the host sends the downstream OTA command (0xBB 0x66 cmd=0x02) the
-// firmware GETs `http://CFG_OTA_HOST_IP:CFG_OTA_HOST_PORT<CFG_OTA_URL_PATH>`,
-// writes the .bin into the passive OTA slot, and reboots into it if it passes
-// validation. The backend must serve the new build's
-// `build/esp32-power-monitor.bin` at that path.
-//
-// Default points at the Python backend's HTTP server (port 38000, same host as
-// the TCP ingest server). Adjust if you host the .bin elsewhere.
-#define CFG_OTA_HOST_IP     "192.168.1.100"
-#define CFG_OTA_HOST_PORT   38000
-#define CFG_OTA_URL_PATH    "/ota/firmware.bin"
+// POST /api/ota/update starts downloading this fixed firmware URL.
+#define CFG_OTA_URL "http://192.168.1.100:38000/ota/firmware.bin"

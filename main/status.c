@@ -2,8 +2,8 @@
  * status.c — the status LED + INA226 ALERT pin.
  *
  * A single low-priority task drives both, so neither ever competes with the
- * display / sample / net tasks. LED: push-pull, active HIGH — no WiFi -> slow
- * blink, idle (0.1 Hz) -> steady on, fast (10 Hz) -> fast blink. ALERT is
+ * display / sample tasks. LED: active HIGH, steady on with WiFi, off without.
+ * ALERT is
  * open-drain / active-low: debounced, logged on transition and, if held,
  * periodically with the last reading so the cause (OVP/OCP/bus fault) is
  * findable.
@@ -53,20 +53,11 @@ static void status_task(void *arg) {
   for (;;) {
     uint32_t now = now_ms();
 
-    // LED state.
+    // Steady WiFi indicator; sampling mode does not affect the LED.
     bool wifi_ok = s_wifi_up && !s_wifi_disconnected;
-    bool on;
-    if (!wifi_ok)
-      on = (now / CFG_LED_SLOW_MS) & 1u; /* slow blink: no WiFi */
-    else if (is_fast_mode())
-      on = (now / CFG_LED_FAST_MS) & 1u; /* fast blink: 10 Hz */
-    else
-      on = true;                         /* steady on: idle */
-    gpio_set_level(CFG_LED_PIN, on ? 1 : 0);
+    gpio_set_level(CFG_LED_PIN, wifi_ok ? 1 : 0);
 
-    // ALERT pin (open-drain, active-low). On the rising edge into asserted,
-    // take a fresh INA226 read and publish an overcurrent event for net_task to
-    // ship to the host; keep the existing held-alert log.
+    // Log overcurrent transitions locally.
     int active = (gpio_get_level(CFG_ALERT_PIN) == 0) ? 1 : 0;
     if (active != s_alert_active) {
       s_alert_active = active;
@@ -77,15 +68,7 @@ static void status_task(void *arg) {
             .i = ina226_get_current_ma(),
             .p = ina226_get_power_mw(),
         };
-        struct event ev = {
-            .type = 0x01, /* shunt overcurrent */
-            .ts = get_epoch_ms(),
-            .v = r.v,
-            .i = r.i,
-            .p = r.p,
-        };
-        event_publish(&ev);
-        ESP_LOGW(TAG, "INA226 ALERT asserted (OCP) V=%.2f I=%.0fmA P=%.1fW -> event queued",
+        ESP_LOGW(TAG, "INA226 ALERT asserted (OCP) V=%.2f I=%.0fmA P=%.1fW",
                  r.v, r.i, r.p / 1000.0f);
       } else {
         ESP_LOGI(TAG, "INA226 ALERT cleared");

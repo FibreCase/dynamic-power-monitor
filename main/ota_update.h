@@ -1,13 +1,7 @@
-/*
- * ota_update.h — start an over-the-air firmware update.
- *
- * Downloads the new application .bin over HTTP (from the host, whose address
- * comes from config.h) into the passive OTA slot, validates it, switches the
- * boot pointer to it, and reboots. On any failure the device keeps running the
- * current firmware. See ota_update.c for the flow.
- */
 #pragma once
+#include "esp_err.h"
 
-/* Spawn the OTA update task and begin the download. Non-blocking: returns
- * immediately, the update runs on its own task and reboots on success. */
-void ota_update_start(void);
+#define OTA_URL_MAX_LEN 256
+
+/* NULL uses CFG_OTA_URL; the URL is copied before returning. Non-blocking. ESP_ERR_INVALID_STATE means an update is already running. */
+esp_err_t ota_update_start(const char *url);

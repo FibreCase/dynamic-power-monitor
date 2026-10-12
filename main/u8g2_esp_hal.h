@@ -15,7 +15,7 @@
 
 #define OLED_I2C_ADDR 0x3C
 
-/* Runs u8g2_Setup_ssd1306_i2c_128x32_univision_f(), wires the HAL callbacks
+/* Runs u8g2_Setup_ssd1306_i2c_128x64_noname_f(), wires the HAL callbacks
  * below, and performs u8g2_InitDisplay()/SetPowerSave(0)/ClearBuffer()+
  * SendBuffer() so the panel is blanked and ready to draw into. `dev` must
  * already be added to the shared I2C bus (see init_i2c()). */

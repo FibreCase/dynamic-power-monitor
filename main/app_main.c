@@ -1,45 +1,9 @@
-/*
- * 12V 供电动态采样监测系统 — ESP32-C3 firmware (ESP-IDF)
- *
- * Reads the INA226 power sensor, renders it on a 128x32 SSD1306 OLED, and
- * streams fixed 24-byte samples over a long-lived TCP connection to the
- * Python host. Host -> ESP32 control frames (set sampling interval) are parsed
- * from the same connection and take effect immediately.
- *
- * This file is the composition root only: it initialises the peripherals and
- * then starts the FreeRTOS tasks that own the running behaviour. The actual
- * work lives in one module per concern:
- *
- *   core.c         shared inter-task state + the set_sampling_interval command
- *   net_task.c     TCP: connect state machine + downstream frames + sample send
- *   sample_task.c  INA226 read on its own period + publish
- *   display.c      OLED (u8g2): splash + live frame + display task
- *   status.c       status LED + INA226 ALERT pin + status task
- *   wifi_ntp.c     WiFi STA + NTP bring-up (semaphore-bounded waits)
- *   ina226.c       register-level INA226 driver
- *   temp_sensor.c  ESP32-C3 internal (die) temperature sensor
- *   u8g2_esp_hal.c u8g2 <-> ESP-IDF I2C bridge
- *
- * app_main order: NVS -> status GPIO -> I2C -> OLED -> INA226 -> WiFi -> NTP ->
- * start the four tasks -> hand the CPU to the scheduler.
- *
- * Shared I2C bus: INA226 (0x40) + SSD1306 OLED (0x3C) — the i2c_master driver
- * serialises transactions, so the display and sample tasks may share the bus.
- *
- * Wire protocol (keep in sync with the Python backend, see TASK.md):
- *   Upstream  (24 bytes, packed, little-endian):
- *     AA 55 | u64 timestamp_ms | f32 voltage(V) | f32 current(mA)
- *           | f32 die_temp(C) | u16 checksum
- *     checksum = sum of the first 22 bytes & 0xFFFF
- *   Downstream (8 bytes, packed, little-endian):
- *     BB 66 | u8 cmd=0x01 | u8 len=0x02 | u16 interval_ms | u16 checksum
- *     checksum = sum of the first 6 bytes & 0xFFFF
- */
+/* Power monitor: local sampling/display, WiFi/NTP and HTTP-triggered OTA. */
 #include "config.h"
 #include "core.h"
 #include "display.h"
 #include "ina226.h"
-#include "net_task.h"
+#include "http_api.h"
 #include "sample_task.h"
 #include "status.h"
 #include "temp_sensor.h"
@@ -100,7 +64,7 @@ void app_main(void) {
   }
 
   // Synchronisation primitives, created before any task is started.
-  core_init();
+  ESP_ERROR_CHECK(core_init());
   status_init_gpio(); // LED output + ALERT input
 
   e = init_i2c();
@@ -143,7 +107,7 @@ void app_main(void) {
   ntp_boot();
   vTaskDelay(pdMS_TO_TICKS(500));
 
-  // Start in idle (0.1 Hz) mode.
+  // Start in normal (10 Hz) mode.
   set_sampling_interval(DEFAULT_INTERVAL_MS);
 
   ESP_LOGI(TAG, "ready: max=%.0fA shunt=%.3fOhm interval=%ums",
@@ -165,9 +129,9 @@ void app_main(void) {
   else
     ESP_LOGW(TAG, "OTA: mark_app_valid failed (%s)", esp_err_to_name(err));
 
-  // Start the tasks. Priority order: display > sample > {net, status}.
+  // Start the tasks. Priority order: display > sample > status.
   status_task_create();
-  net_task_create();
+  ESP_ERROR_CHECK(http_api_start());
   sample_task_create();
   display_task_create();
 

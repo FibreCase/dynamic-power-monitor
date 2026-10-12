@@ -1,4 +1,4 @@
-idf_component_register(SRCS "temp_sensor.c" "app_main.c" "core.c" "net_task.c" "sample_task.c"
+idf_component_register(SRCS "temp_sensor.c" "app_main.c" "core.c" "http_api.c" "sample_task.c"
                        "display.c" "status.c" "wifi_ntp.c" "ota_update.c"
                        "ina226.c" "u8g2_esp_hal.c"
                        INCLUDE_DIRS "."
@@ -13,6 +13,8 @@ idf_component_register(SRCS "temp_sensor.c" "app_main.c" "core.c" "net_task.c" "
                            esp_timer
                            lwip
                            app_update
+                           esp_http_server
+                           mbedtls
                            esp_http_client
                            driver
                            u8g2)
