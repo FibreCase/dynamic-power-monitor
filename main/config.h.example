@@ -22,6 +22,8 @@
 // ---------------------------------------------------------------------------
 #define CFG_WIFI_SSID    "CHANGE_ME_SSID"
 #define CFG_WIFI_PASS    "CHANGE_ME_PASSWORD"
+// DHCP hostname, 1-32 letters/digits/hyphens, without a domain suffix.
+#define CFG_HOSTNAME     "power-monitor"
 #define CFG_NTP_HOST     "ntp.aliyun.com"  // SNTP server (UTC)
 
 // ---------------------------------------------------------------------------

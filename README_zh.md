@@ -12,6 +12,17 @@ LED 在 WiFi 连接时常亮、断开时熄灭，不再闪烁。
 保留本地采样、OLED、WiFi/NTP 和过流日志。Python 子模块保留为旧版工具；
 下方的上位机面板和通信协议说明适用于旧版固件。
 
+在 `main/config.h` 中配置设备的 DHCP hostname：
+
+```c
+#define CFG_HOSTNAME "power-monitor"
+```
+
+使用 1–32 个字母、数字或连字符，不包含 `.lan` 等域名后缀，首尾使用字母或数字。
+重新编译并重启后生效。若路由器支持 DHCP 主机名解析，可使用
+`http://power-monitor.lan/api/ota/update`（具体后缀取决于路由器）；
+否则使用设备 IP。此配置不启用 mDNS，也不自动提供 `.local` 解析。
+
 在 `main/config.h` 中设置固定固件下载地址 `CFG_OTA_URL`（完整 `.bin` URL）。
 设备 HTTP API 监听 80 端口，无需请求体：
 

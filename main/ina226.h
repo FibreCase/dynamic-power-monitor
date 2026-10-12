@@ -1,7 +1,7 @@
 /*
  * INA226 driver — register-level, calibrated, with mode-dependent averaging.
  *
- * Uses the shared I2C bus (a device handle for address 0x40). Calibration
+ * Uses the shared I2C bus (a device handle for INA226_ADDR). Calibration
  * follows the TI datasheet formula Cal = 0.00512 / (current_LSB * R_shunt),
  * with current_LSB = maxCurrent / 32768. The shunt must satisfy
  * maxCurrent * R_shunt <= 81.9 mV (the INA226's shunt range); init rejects
@@ -35,9 +35,8 @@ float ina226_get_power_mw(void);
 /* Switch the hardware averaging window (see INA226_AVG_* above). */
 void ina226_set_average(uint8_t avg_code);
 
-/* Arm the shunt overcurrent comparator so ALERT asserts when the sampled
- * current exceeds `threshold_a` (amperes). Writes only MAR/MCP/LAR — it never
- * touches CAL/CONFIG, so the voltage/current/power reads are unaffected.
- * MCP enables the shunt comparator only (bus comparator masked), default
- * polarity (alert above threshold), non-latched (level) ALERT. */
+/* Arm shunt overcurrent: Alert Limit (0x07) = I * R_shunt / 2.5 uV,
+ * Mask/Enable (0x06) selects SOL, active-low, non-latched. Requires successful
+ * initialization and a positive threshold within the signed shunt range.
+ * CAL/CONFIG and normal voltage/current/power reads are unaffected. */
 esp_err_t ina226_set_ocp_threshold(float threshold_a);

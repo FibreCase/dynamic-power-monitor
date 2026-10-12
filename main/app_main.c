@@ -83,8 +83,8 @@ void app_main(void) {
              esp_err_to_name(e));
     display_splash("INA226 FAIL");
   } else {
-    // Arm the shunt overcurrent comparator (writes only MAR/MCP/LAR — the
-    // reads are unaffected). ALERT on GPIO3 then asserts past the threshold.
+    // Arm the shunt overcurrent comparator using Alert Limit and Mask/Enable.
+    // ALERT asserts low when the threshold is exceeded.
     esp_err_t oe = ina226_set_ocp_threshold(CFG_OCP_THRESHOLD_A);
     if (oe != ESP_OK)
       ESP_LOGW(TAG, "INA226 OCP threshold not set: %s", esp_err_to_name(oe));

@@ -13,6 +13,17 @@ and sample/OCP uploads have been removed. Sampling, OLED, WiFi/NTP and local OCP
 logs remain. The Python submodule is retained as legacy tooling; the dashboard
 and protocol descriptions below refer to the previous firmware.
 
+Configure the device DHCP hostname in `main/config.h`:
+
+```c
+#define CFG_HOSTNAME "power-monitor"
+```
+
+Use 1–32 letters, digits or hyphens, with a letter/digit at either end and no
+suffix such as `.lan`. Rebuild and reboot to apply. If the router resolves DHCP
+hostnames, use `http://power-monitor.lan/api/ota/update` (the suffix depends on
+the router); otherwise use the device IP. This does not enable mDNS or `.local`.
+
 Configure `CFG_OTA_URL` in `main/config.h` with the fixed firmware `.bin` URL.
 The HTTP API listens on port 80. Trigger an asynchronous download with:
 
