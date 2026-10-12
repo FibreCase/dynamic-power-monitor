@@ -93,11 +93,20 @@ esp_err_t ina226_init(i2c_master_dev_handle_t dev,
     return ESP_OK;
 }
 
+esp_err_t ina226_read_voltage(float *voltage)
+{
+    if (!voltage) return ESP_ERR_INVALID_ARG;
+    uint16_t raw;
+    esp_err_t err = read_reg(REG_BUS, &raw);
+    if (err == ESP_OK) *voltage = raw * BUS_LSB_V;
+    return err;
+}
+
 float ina226_get_voltage(void)
 {
-    uint16_t v;
-    if (read_reg(REG_BUS, &v) != ESP_OK) return 0.0f;
-    return v * BUS_LSB_V;
+    float voltage = 0.0f;
+    ina226_read_voltage(&voltage);
+    return voltage;
 }
 
 float ina226_get_current_ma(void)

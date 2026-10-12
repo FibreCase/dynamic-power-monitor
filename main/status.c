@@ -28,6 +28,19 @@ static volatile int s_alert_active = 0;
 static uint32_t s_last_alert_log = 0;
 
 void status_init_gpio(void) {
+  // Preload both output latches HIGH before enabling output to avoid a low pulse.
+  ESP_ERROR_CHECK(gpio_set_level(CFG_NMOS_CTL2_PIN, 1));
+  ESP_ERROR_CHECK(gpio_set_level(CFG_NMOS_CTL1_PIN, 1));
+  gpio_config_t nmos = {
+      .pin_bit_mask = (1ULL << CFG_NMOS_CTL2_PIN) | (1ULL << CFG_NMOS_CTL1_PIN),
+      .mode = GPIO_MODE_OUTPUT,
+      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+  };
+  ESP_ERROR_CHECK(gpio_config(&nmos));
+
+
   // LED: push-pull output, no pull, no interrupt.
   gpio_config_t led = {0};
   led.pin_bit_mask = 1ULL << CFG_LED_PIN;

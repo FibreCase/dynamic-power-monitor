@@ -6,3 +6,6 @@
 
 /* Start the sample task. */
 void sample_task_create(void);
+
+/* Arm power monitoring 10 seconds after boot completes, before task creation. */
+void power_mode_monitor_start(void);

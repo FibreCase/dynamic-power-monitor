@@ -15,6 +15,7 @@ static const char *TAG = "power-mon";
 /* --- Shared state --- */
 struct reading s_reading;
 uint32_t s_interval_ms = DEFAULT_INTERVAL_MS;
+bool s_battery_mode = false;
 bool s_wifi_up = false;
 bool s_wifi_disconnected = false;
 SemaphoreHandle_t s_mutex;

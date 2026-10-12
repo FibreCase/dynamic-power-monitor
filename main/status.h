@@ -3,7 +3,7 @@
  */
 #pragma once
 
-/* Configure the LED (push-pull output) and the ALERT pin (pulled-up input).
+/* Enable both NMOS gates HIGH, configure LED output and ALERT input.
  * Call before starting the status task. */
 void status_init_gpio(void);
 

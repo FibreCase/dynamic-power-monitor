@@ -25,6 +25,8 @@ esp_err_t ina226_init(i2c_master_dev_handle_t dev,
 
 /* Bus voltage in volts (fixed 1.25 mV LSB). */
 float ina226_get_voltage(void);
+/* Unlike the convenience getter, reports I2C failures instead of returning zero. */
+esp_err_t ina226_read_voltage(float *voltage);
 
 /* Sampled current in milliamps (signed). */
 float ina226_get_current_ma(void);

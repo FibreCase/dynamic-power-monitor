@@ -36,11 +36,19 @@ void display_splash(const char *msg) {
 /* 128x64: large power, voltage/current row, then WiFi and sampling mode. */
 static void oled_live_render(void) {
   struct reading r;
-  bool normal;
+  bool normal, battery;
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   r = s_reading;
+  battery = s_battery_mode;
   normal = (s_interval_ms <= NORMAL_INTERVAL_MS);
   xSemaphoreGive(s_mutex);
+
+  static int contrast = -1;
+  int desired = battery ? CFG_OLED_CONTRAST_BATTERY : CFG_OLED_CONTRAST_NORMAL;
+  if (contrast != desired) {
+    u8g2_SetContrast(&s_u8g2, desired);
+    contrast = desired;
+  }
 
   char vbuf[20], ibuf[20], pbuf[20];
   const int width = u8g2_GetDisplayWidth(&s_u8g2);
@@ -69,7 +77,7 @@ static void oled_live_render(void) {
   u8g2_DrawStr(&s_u8g2, 0, 48, vbuf);
   u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, ibuf), 48, ibuf);
 
-  const char *wifi = (!s_wifi_up || s_wifi_disconnected) ? "WiFi DISC" : "WiFi OK";
+  const char *wifi = battery ? "BATTERY" : (!s_wifi_up || s_wifi_disconnected) ? "WiFi DISC" : "WiFi OK";
   const char *mode = normal ? "10Hz" : "1Hz";
   u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
   u8g2_DrawStr(&s_u8g2, 0, 62, wifi);

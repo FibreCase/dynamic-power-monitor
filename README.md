@@ -2,8 +2,27 @@
 
 ## Current `5v` firmware
 
-Normal sampling is 10 Hz (default); slow sampling is 1 Hz. The OLED shows the
-rate. The LED stays on while WiFi is connected and off while disconnected.
+Power modes automatically follow INA226 bus voltage:
+
+| Mode | Voltage | Sampling | WiFi | OLED contrast |
+|---|---|---|---|---|
+| External | ≥4.5 V | 10 Hz | On, reconnects automatically | 255 |
+| Battery saving | <4.5 V | 1 Hz | Radio off | 128 |
+
+Power loss is detected within about 100 ms; restoration within about 1 second,
+plus sensor conversion/scheduling time. There is no hysteresis. Failed I2C reads
+retain the mode. Battery mode displays `BATTERY` and keeps checking voltage.
+Boot retains normal mode and the original WiFi/NTP waits. Automatic voltage
+monitoring starts 10 seconds after boot completes. WiFi restoration reconnects
+asynchronously. The LED is steady on when connected, off otherwise. Contrast 128 is half
+the normal register setting; perceived brightness may not be exactly halved.
+HTTP/OTA are unavailable on battery and return after power and WiFi reconnect.
+Configure the threshold and contrast via `CFG_EXTERNAL_POWER_MIN_V`,
+`CFG_OLED_CONTRAST_NORMAL` and `CFG_OLED_CONTRAST_BATTERY` in `config.h`.
+
+IO6 controls NMOS CTL2; IO7 controls NMOS CTL1. Both outputs are HIGH
+from GPIO initialization and stay on in external and battery modes. Configure
+the pins with `CFG_NMOS_CTL2_PIN` and `CFG_NMOS_CTL1_PIN`.
 
 The current board uses a 128×64 SSD1306 I²C OLED (0x3C, 0° rotation).
 Power appears above voltage/current, with WiFi and sampling status at the bottom.
@@ -57,7 +76,11 @@ oversized parameters return 400.
 
 202 acknowledges startup only. Download results are logged locally.
 Successful validation switches OTA slots and reboots; failures retain the current
-firmware. Use a new firmware version; identical versions are rejected.
+firmware. After downloading, writing and validating the inactive slot, OTA
+compares app-image SHA-256 hashes rather than version strings. Changed images
+with identical versions (including dirty builds) can update; identical images
+skip the boot-slot switch and reboot. Duplicate images are still downloaded
+and written. Hash failures retain the current firmware; results are logged locally.
 
 [English](README.md) | [中文](README_zh.md)
 

@@ -6,11 +6,12 @@
  *   2. Refuses if the running app is still awaiting first-boot confirmation
  *      (PENDING_VERIFY) — you can't stack an OTA on top of an unconfirmed one.
  *   3. GETs the new .bin over HTTP (fixed URL from config.h), checking the
- *      Content-Length fits the slot and that we aren't re-flashing the same
- *      version.
+ *      Content-Length fits the slot.
  *   4. Streams it into the passive slot with esp_ota_write (incremental erase),
  *      then esp_ota_end() to validate the image.
- *   5. On success, repoints the boot slot (esp_ota_set_boot_partition) and
+ *   5. Compares validated app-image SHA-256 against the running image; identical
+ *      images are skipped even if their version strings match a changed build.
+ *   6. On success, repoints the boot slot (esp_ota_set_boot_partition) and
  *      reboots. On ANY failure it cleans up and returns, leaving the running
  *      firmware untouched and the device online.
  *
@@ -28,8 +29,6 @@
 #include <string.h>
 
 #include "config.h"
-#include "esp_app_desc.h"
-#include "esp_app_format.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
@@ -132,7 +131,6 @@ static void ota_update_task(void *arg) {
   }
 
   size_t total = 0;
-  bool version_checked = false;
   bool fail = false;
   for (;;) {
     errno = 0;
@@ -143,28 +141,6 @@ static void ota_update_task(void *arg) {
       break;
     }
     if (n > 0) {
-      // On the first chunk, sanity-check the incoming image's version so we
-      // don't "update" to the build we're already running.
-      if (!version_checked &&
-          n > (int)(sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) +
-                   sizeof(esp_app_desc_t))) {
-        esp_app_desc_t new_info, run_info;
-        memcpy(&new_info,
-               &buf[sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t)],
-               sizeof(esp_app_desc_t));
-        if (esp_ota_get_partition_description(running, &run_info) == ESP_OK) {
-          ESP_LOGI(TAG, "OTA: running v%s -> new v%s", run_info.version,
-                   new_info.version);
-          if (memcmp(new_info.version, run_info.version, sizeof(new_info.version)) ==
-              0) {
-            ESP_LOGW(TAG, "OTA: new image is the same version as running — no-op, "
-                          "keeping current firmware");
-            fail = true;
-            break;
-          }
-        }
-        version_checked = true;
-      }
       err = esp_ota_write(handle, buf, (size_t)n);
       if (err != ESP_OK) {
         ESP_LOGE(TAG, "OTA: esp_ota_write failed (%s)", esp_err_to_name(err));
@@ -208,6 +184,24 @@ static void ota_update_task(void *arg) {
     ESP_LOGE(TAG, "OTA: esp_ota_end failed (%s)%s — keeping current firmware",
              esp_err_to_name(err),
              err == ESP_ERR_OTA_VALIDATE_FAILED ? " (image invalid/corrupt)" : "");
+    ota_task_finish();
+    return;
+  }
+
+  // Compare complete, validated image content, independent of version strings
+  // and HTTP read boundaries. App hashes exclude unused partition space.
+  uint8_t running_hash[32], target_hash[32];
+  err = esp_partition_get_sha256(target, target_hash);
+  if (err == ESP_OK)
+    err = esp_partition_get_sha256(running, running_hash);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "OTA: image SHA-256 failed (%s) — keeping current firmware",
+             esp_err_to_name(err));
+    ota_task_finish();
+    return;
+  }
+  if (memcmp(running_hash, target_hash, sizeof(running_hash)) == 0) {
+    ESP_LOGI(TAG, "OTA: identical image SHA-256 — skipping reboot");
     ota_task_finish();
     return;
   }

@@ -65,7 +65,7 @@ void app_main(void) {
 
   // Synchronisation primitives, created before any task is started.
   ESP_ERROR_CHECK(core_init());
-  status_init_gpio(); // LED output + ALERT input
+  status_init_gpio(); // NMOS gates on + LED output + ALERT input
 
   e = init_i2c();
   if (e != ESP_OK) {
@@ -132,6 +132,7 @@ void app_main(void) {
   // Start the tasks. Priority order: display > sample > status.
   status_task_create();
   ESP_ERROR_CHECK(http_api_start());
+  power_mode_monitor_start();
   sample_task_create();
   display_task_create();
 

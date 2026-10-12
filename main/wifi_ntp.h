@@ -14,3 +14,7 @@ esp_err_t wifi_boot(void);
 /* Start SNTP and block until the clock is synced or the 30 s window elapses
  * (semaphore-based). Per spec, sampling waits for the synced clock. */
 esp_err_t ntp_boot(void);
+
+#include <stdbool.h>
+/* Radio power control after normal boot; retry on error. */
+esp_err_t wifi_set_enabled(bool enabled);

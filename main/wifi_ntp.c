@@ -15,6 +15,7 @@
 #include "wifi_ntp.h"
 
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/time.h>
 
@@ -36,6 +37,9 @@ static const char *TAG = "power-mon";
 #define WIFI_CONNECT_WINDOW_MS 20000u /* app_main waits this long for an IP */
 #define NTP_SYNC_WINDOW_MS 30000u     /* app_main waits this long for a sync */
 
+static atomic_bool s_enabled = ATOMIC_VAR_INIT(true);
+static atomic_bool s_runtime_control = ATOMIC_VAR_INIT(false);
+static bool s_started;
 static esp_netif_t *s_netif;
 static TimerHandle_t s_wifi_timer;
 static SemaphoreHandle_t s_wifi_sem;
@@ -83,13 +87,21 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id,
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     // Link lost; the STA retries automatically. LED turns off.
     const wifi_event_sta_disconnected_t *d = data;
+    s_wifi_up = false;
     s_wifi_disconnected = true;
+    if (!atomic_load(&s_enabled)) return;
+    esp_wifi_connect();
     ESP_LOGW(TAG, "WiFi disconnected: reason=%u (%s)", d->reason,
              wifi_reason_str(d->reason));
+  } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+    if (atomic_load(&s_enabled) && atomic_load(&s_runtime_control))
+      esp_wifi_connect();
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+    if (!atomic_load(&s_enabled)) return;
     s_wifi_disconnected = false;
     ESP_LOGI(TAG, "WiFi connected");
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    if (!atomic_load(&s_enabled)) return;
     s_wifi_up = true;
     s_wifi_disconnected = false;
     if (s_wifi_timer)
@@ -165,6 +177,7 @@ static esp_err_t wifi_sta_start(void) {
   ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
   ESP_ERROR_CHECK(esp_wifi_start());
   ESP_ERROR_CHECK(esp_wifi_connect());
+  s_started = true;
 
   ESP_LOGI(TAG, "WiFi: connecting to %s ...", CFG_WIFI_SSID);
   return ESP_OK;
@@ -247,4 +260,19 @@ esp_err_t ntp_boot(void) {
     s_ntp_sem = NULL;
   }
   return get_epoch_ms() > 1000000000LL ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+esp_err_t wifi_set_enabled(bool enabled) {
+  atomic_store(&s_runtime_control, true);  atomic_store(&s_enabled, enabled);
+  if (!enabled) {
+    s_wifi_up = false;
+    s_wifi_disconnected = true;
+  }
+  if (s_started == enabled) return ESP_OK;
+  esp_err_t err = enabled ? esp_wifi_start() : esp_wifi_stop();
+  if (err == ESP_OK) {
+    s_started = enabled;
+    ESP_LOGI(TAG, "WiFi radio %s", enabled ? "enabled" : "disabled");
+  }
+  return err;
 }

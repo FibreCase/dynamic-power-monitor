@@ -67,3 +67,12 @@
 // ---------------------------------------------------------------------------
 // POST /api/ota/update starts downloading this fixed firmware URL.
 #define CFG_OTA_URL "http://192.168.1.100:38000/ota/firmware.bin"
+
+// Automatic power modes (INA226 bus voltage).
+#define CFG_EXTERNAL_POWER_MIN_V 4.5f
+#define CFG_OLED_CONTRAST_NORMAL 255u
+#define CFG_OLED_CONTRAST_BATTERY 128u
+
+// NMOS gate control: active HIGH, both remain on in all power modes.
+#define CFG_NMOS_CTL2_PIN GPIO_NUM_6
+#define CFG_NMOS_CTL1_PIN GPIO_NUM_7
