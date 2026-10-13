@@ -20,3 +20,7 @@
  * SendBuffer() so the panel is blanked and ready to draw into. `dev` must
  * already be added to the shared I2C bus (see init_i2c()). */
 void u8g2_esp_hal_init(u8g2_t *u8g2, i2c_master_dev_handle_t dev);
+
+#include <stdbool.h>
+void u8g2_esp_hal_frame_begin(void);
+bool u8g2_esp_hal_frame_ok(void);

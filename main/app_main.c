@@ -107,6 +107,14 @@ void app_main(void) {
   ESP_LOGI(TAG, "ready: max=%.0fA shunt=%.3fOhm interval=%ums",
            CFG_MAX_CURRENT_A, CFG_SHUNT_OHM, (unsigned)s_interval_ms);
 
+  // Start control/sampling before low-priority display and bulk OTA work.
+  status_task_create();
+  ESP_ERROR_CHECK(environment_sensor_start(s_bus));
+  ESP_ERROR_CHECK(http_api_control_start());
+  power_mode_monitor_start();
+  sample_task_create();
+  display_task_create();
+
   // Confirm this app is workable so the OTA rollback machinery is coherent.
   // - A freshly-OTA'd app is in PENDING_VERIFY on first boot; this flips it to
   //   VALID so it is no longer eligible for rollback (and the next OTA is
@@ -121,14 +129,6 @@ void app_main(void) {
     ESP_LOGI(TAG, "OTA: running app confirmed valid (rollback armed)");
   else
     ESP_LOGW(TAG, "OTA: mark_app_valid failed (%s)", esp_err_to_name(err));
-
-  // Start the tasks. Priority order: display > sample > status.
-  status_task_create();
-  ESP_ERROR_CHECK(environment_sensor_start(s_bus));
-  ESP_ERROR_CHECK(http_api_control_start());
-  power_mode_monitor_start();
-  sample_task_create();
-  display_task_create();
 
   // app_main's task is done; hand the CPU to the scheduler and release this
   // task's stack.

@@ -41,7 +41,7 @@
 static const char *TAG = "ota";
 
 #define OTA_TASK_STACK 8192
-#define OTA_TASK_PRIO  4
+#define OTA_TASK_PRIO  1
 #define OTA_READ_BUF   4096
 #define HTTP_TIMEOUT_MS 15000
 
@@ -148,6 +148,7 @@ static void ota_update_task(void *arg) {
         break;
       }
       total += (size_t)n;
+      vTaskDelay(1); /* bound uninterrupted work even on a fast local download */
     } else { // n == 0
       if (errno == ECONNRESET || errno == ENOTCONN) {
         ESP_LOGE(TAG, "OTA: connection reset (errno=%d)", errno);

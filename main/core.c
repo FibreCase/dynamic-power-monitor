@@ -17,8 +17,6 @@ struct reading s_reading;
 uint32_t s_interval_ms = DEFAULT_INTERVAL_MS;
 bool s_boot_loading = true;
 bool s_power_saving = true;
-bool s_wifi_up = false;
-bool s_wifi_disconnected = false;
 SemaphoreHandle_t s_mutex;
 
 /* --- Control / helpers --- */
@@ -55,8 +53,7 @@ void set_sampling_interval(uint16_t ms) {
     snprintf(mode, sizeof(mode), "%ums", (unsigned)ms);
   ESP_LOGI(TAG, "sampling interval -> %u ms (%s)", (unsigned)ms, mode);
 
-  // The sample task re-reads s_interval_ms every 5 ms tick, so a switch to a
-  // faster period takes effect on its very next tick (~5 ms) — same as before.
+
 }
 
 void reading_publish(const struct reading *r) {

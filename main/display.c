@@ -11,6 +11,7 @@
 #include "display.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "config.h"
 #include "core.h"
@@ -19,7 +20,23 @@
 #include "freertos/task.h"
 #include "u8g2_esp_hal.h"
 
+_Static_assert(pdMS_TO_TICKS(OLED_REFRESH_MS) > 0, "OLED refresh must be at least one tick");
 static u8g2_t s_u8g2;
+
+static void display_send_if_changed(void) {
+  static uint8_t last_frame[1024];
+  static bool sent;
+  uint8_t *frame = u8g2_GetBufferPtr(&s_u8g2);
+  if (sent && memcmp(last_frame, frame, sizeof(last_frame)) == 0) return;
+  u8g2_esp_hal_frame_begin();
+  u8g2_SendBuffer(&s_u8g2);
+  if (u8g2_esp_hal_frame_ok()) {
+    memcpy(last_frame, frame, sizeof(last_frame));
+    sent = true;
+  } else {
+    sent = false; /* hardware may contain a partial frame: force a full retry */
+  }
+}
 
 void display_init(i2c_master_dev_handle_t oled) {
   u8g2_esp_hal_init(&s_u8g2, oled);
@@ -34,7 +51,7 @@ void display_splash(const char *msg) {
   int x = ((int)u8g2_GetDisplayWidth(&s_u8g2) -
            (int)u8g2_GetStrWidth(&s_u8g2, msg)) / 2;
   u8g2_DrawStr(&s_u8g2, x > 0 ? x : 0, 36, msg);
-  u8g2_SendBuffer(&s_u8g2);
+  display_send_if_changed();
 }
 
 /* Both screens share a readable power/control and AQI footer. */
@@ -100,7 +117,7 @@ static void oled_environment_render(void) {
   u8g2_DrawStr(&s_u8g2, 0, 48, humidity);
   u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, tvoc), 48, tvoc);
   oled_footer_render(&r);
-  u8g2_SendBuffer(&s_u8g2);
+  display_send_if_changed();
 }
 
 /* 128x64: large power, voltage/current row, then WiFi and sampling mode. */
@@ -115,8 +132,9 @@ static void oled_live_render(void) {
   static int contrast = -1;
   int desired = saving ? CFG_OLED_CONTRAST_BATTERY : CFG_OLED_CONTRAST_NORMAL;
   if (contrast != desired) {
+    u8g2_esp_hal_frame_begin();
     u8g2_SetContrast(&s_u8g2, desired);
-    contrast = desired;
+    if (u8g2_esp_hal_frame_ok()) contrast = desired;
   }
 
   if (saving || environment_ui_selected()) {
@@ -165,7 +183,7 @@ static void oled_live_render(void) {
 
   oled_footer_render(&environment);
 
-  u8g2_SendBuffer(&s_u8g2);
+  display_send_if_changed();
 }
 
 /* Redraw the live frame every OLED_REFRESH_MS (the 100 ms cap that keeps the
@@ -185,8 +203,9 @@ static void display_task(void *arg) {
 }
 
 #define STACK_DISPLAY 4096 /* u8g2 full-frame buffer + string formatting */
-#define PRIO_DISPLAY 4     /* highest: a u8g2 flush must never delay sampling */
+#define PRIO_DISPLAY 1     /* control and sensor tasks preempt display work */
 
 void display_task_create(void) {
-  xTaskCreate(display_task, "display", STACK_DISPLAY, NULL, PRIO_DISPLAY, NULL);
+  ESP_ERROR_CHECK(xTaskCreate(display_task, "display", STACK_DISPLAY, NULL,
+                             PRIO_DISPLAY, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 }

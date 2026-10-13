@@ -23,15 +23,13 @@ extern struct reading s_reading;
 extern uint32_t s_interval_ms;
 extern bool s_boot_loading; /* startup plus 2-second grace period; guarded by s_mutex */
 extern bool s_power_saving; /* guarded by s_mutex */
-extern bool s_wifi_up;
-extern bool s_wifi_disconnected;
 extern SemaphoreHandle_t s_mutex;  /* guards s_reading + s_interval_ms */
 
 /* --- Control / helpers (implemented in core.c) --- */
 esp_err_t core_init(void);  /* create the mutex, before tasks */
 
 /* Switch the sampling period AND the INA226 hardware averaging. Called from
- * app_main (before tasks start) for local sampling control. */
+ * app_main before tasks start, then the sampling task on mode transitions. */
 void set_sampling_interval(uint16_t ms);
 
 /* Thread-safe copy of the latest reading (one writer, many readers). */

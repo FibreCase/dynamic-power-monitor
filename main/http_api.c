@@ -14,6 +14,7 @@
 #include "ota_update.h"
 
 static httpd_handle_t s_server;
+static TaskHandle_t s_control_task;
 
 /* Decode query values in-place; malformed escapes and embedded NUL are invalid. */
 static int hex_digit(char c) {
@@ -245,6 +246,12 @@ static esp_err_t http_server_start(void) {
     return ESP_OK;
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
+  config.task_priority = 2; /* never preempt sampling or GPIO/PWM control */
+  config.stack_size = 6144; /* JSON/OTA handlers have ~1.5KB local buffers */
+  config.max_open_sockets = 4;
+  config.lru_purge_enable = true;
+  config.recv_wait_timeout = 2;
+  config.send_wait_timeout = 2;
   esp_err_t err = httpd_start(&s_server, &config);
   if (err != ESP_OK)
     return err;
@@ -314,11 +321,15 @@ static void http_control_task(void *arg) {
     }
     if (err != ESP_OK)
       ESP_LOGW("http", "server state change failed: %s", esp_err_to_name(err));
-    vTaskDelay(pdMS_TO_TICKS(err == ESP_OK ? 100 : 1000));
+    ulTaskNotifyTake(pdTRUE, err == ESP_OK ? portMAX_DELAY : pdMS_TO_TICKS(1000));
   }
 }
 
 esp_err_t http_api_control_start(void) {
-  return xTaskCreate(http_control_task, "http-control", 3072, NULL, 2, NULL) == pdPASS
+  return xTaskCreate(http_control_task, "http-control", 3072, NULL, 2, &s_control_task) == pdPASS
              ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+void http_api_notify_power_change(void) {
+  if (s_control_task) xTaskNotifyGive(s_control_task);
 }

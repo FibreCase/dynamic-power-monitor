@@ -9,13 +9,15 @@ _Static_assert(CFG_CTL1_PWM_DUTY_PCT >= 0 && CFG_CTL1_PWM_DUTY_PCT <= 100,
 _Static_assert(CFG_CTL2_PWM_DUTY_PCT >= 0 && CFG_CTL2_PWM_DUTY_PCT <= 100,
                "CTL2 default duty must be 0-100%");
 static SemaphoreHandle_t s_lock;
+static SemaphoreHandle_t s_save_lock;
 static struct pwm_settings s_settings = {
     .ctl1 = CFG_CTL1_PWM_DUTY_PCT, .ctl2 = CFG_CTL2_PWM_DUTY_PCT,
 };
 
 esp_err_t pwm_settings_init(void) {
   s_lock = xSemaphoreCreateMutex();
-  if (!s_lock) return ESP_ERR_NO_MEM;
+  s_save_lock = xSemaphoreCreateMutex();
+  if (!s_lock || !s_save_lock) return ESP_ERR_NO_MEM;
   nvs_handle_t handle;
   esp_err_t err = nvs_open("pwm", NVS_READONLY, &handle);
   if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
@@ -46,9 +48,11 @@ esp_err_t pwm_settings_save(unsigned ctl1, unsigned ctl2) {
   bool allowed = !s_power_saving && !s_boot_loading;
   xSemaphoreGive(s_mutex);
   if (!allowed) return ESP_ERR_INVALID_STATE;
-  xSemaphoreTake(s_lock, portMAX_DELAY);
-  if (s_settings.ctl1 == ctl1 && s_settings.ctl2 == ctl2) {
-    xSemaphoreGive(s_lock);
+  xSemaphoreTake(s_save_lock, portMAX_DELAY);
+  struct pwm_settings current;
+  pwm_settings_get(&current);
+  if (current.ctl1 == ctl1 && current.ctl2 == ctl2) {
+    xSemaphoreGive(s_save_lock);
     return ESP_OK; /* avoid needless flash writes */
   }
   nvs_handle_t handle;
@@ -59,7 +63,11 @@ esp_err_t pwm_settings_save(unsigned ctl1, unsigned ctl2) {
     if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
   }
-  if (err == ESP_OK) s_settings = (struct pwm_settings){ctl1, ctl2};
-  xSemaphoreGive(s_lock);
+  if (err == ESP_OK) {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_settings = (struct pwm_settings){ctl1, ctl2};
+    xSemaphoreGive(s_lock);
+  }
+  xSemaphoreGive(s_save_lock);
   return err;
 }

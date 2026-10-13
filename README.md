@@ -345,3 +345,10 @@ Both power and environment UI show `TVOC 12`, without ppb. The API `tvoc_ppb` fi
 
 Power UI places voltage upper right, with a small V label above 17px digits.
 Large power remains upper left; current/TVOC occupy the next row, modes/AQI the bottom.
+
+## Scheduling and performance review
+
+Sampling uses deadline waits; OLED transfers only changed frames. Network and
+environment workers use mode notifications, and NVS commits do not hold the
+PWM snapshot lock. Sampling/control run ahead of display/OTA. Alert logs use
+the latest cached sample. See the [review and hardware validation plan](docs/performance-review.md).

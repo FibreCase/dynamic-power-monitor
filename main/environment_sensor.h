@@ -16,3 +16,6 @@ struct environment_reading {
 
 esp_err_t environment_sensor_start(i2c_master_bus_handle_t bus);
 void environment_sensor_get(struct environment_reading *out);
+
+/* Wake interval scheduling after a PWR/ECO transition. */
+void environment_sensor_notify_power_change(void);

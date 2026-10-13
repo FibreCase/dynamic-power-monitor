@@ -21,11 +21,12 @@
 #include "core.h"
 #include "ina226.h"
 #include "pwm_settings.h"
+#include "wifi_ntp.h"
 
 static const char *TAG = "power-mon";
 
 #define STACK_STATUS 3072
-#define PRIO_STATUS 2
+#define PRIO_STATUS 3
 
 static atomic_bool s_environment_ui = ATOMIC_VAR_INIT(false);
 static atomic_int s_nmos_mode = ATOMIC_VAR_INIT(NMOS_RA);
@@ -72,8 +73,11 @@ static void pwm_set(unsigned output, unsigned duty_pct) {
   previous[output] = duty_pct;
 }
 
-static void nmos_set_outputs(bool presence, bool saving) {
-  enum nmos_mode mode = nmos_control_mode();
+static void nmos_set_outputs(bool presence) {
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool saving = s_power_saving;
+  enum nmos_mode mode = atomic_load(&s_nmos_mode);
+  xSemaphoreGive(s_mutex);
   bool ctl1 = mode != NMOS_OFF && (mode == NMOS_ON || presence);
   bool ctl2 = mode == NMOS_ON || (mode == NMOS_RA && !saving && presence);
   struct pwm_settings settings;
@@ -105,11 +109,8 @@ void status_init_gpio(void) {
   ESP_ERROR_CHECK(gpio_config(&button));
 
   // Boot is saving mode: CTL1 follows radar, CTL2 off, unless overridden.
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  bool saving = s_power_saving;
-  xSemaphoreGive(s_mutex);
   pwm_init();
-  nmos_set_outputs(radar_presence_detected(), saving);
+  nmos_set_outputs(radar_presence_detected());
 
 
 
@@ -143,12 +144,6 @@ void nmos_control_reset(void) {
 
 enum nmos_mode nmos_control_mode(void) {
   xSemaphoreTake(s_mutex, portMAX_DELAY);
-  bool saving = s_power_saving;
-  if (saving) {
-    int expected = NMOS_BL;
-    if (atomic_compare_exchange_strong(&s_nmos_mode, &expected, NMOS_RA))
-      ESP_LOGI(TAG, "NMOS mode: BL -> RA (ECO)");
-  }
   enum nmos_mode mode = atomic_load(&s_nmos_mode);
   xSemaphoreGive(s_mutex);
   return mode;
@@ -215,6 +210,7 @@ static void status_task(void *arg) {
   uint32_t button_pressed_at = button_changed_at;
   bool long_handled = button_pressed; /* ignore a key already held at boot */
   ESP_LOGI(TAG, "Button IO9: %s", button_pressed ? "pressed" : "released");
+  TickType_t last_wake = xTaskGetTickCount();
   for (;;) {
     uint32_t now = now_ms();
 
@@ -256,14 +252,14 @@ static void status_task(void *arg) {
     bool saving = s_power_saving;
     xSemaphoreGive(s_mutex);
     int presence = radar_presence_detected();
-    nmos_set_outputs(presence, saving);
+    nmos_set_outputs(presence);
     if (presence != last_presence) {
       last_presence = presence;
       ESP_LOGI(TAG, "Radar: %s", presence ? "occupied" : "empty");
     }
 
     // Saving mode forces the LED off, even while WiFi is reconnecting.
-    bool wifi_ok = s_wifi_up && !s_wifi_disconnected;
+    bool wifi_ok = wifi_is_ready();
     gpio_set_level(CFG_LED_PIN, !saving && wifi_ok ? 1 : 0);
 
     // Log overcurrent transitions locally.
@@ -272,11 +268,8 @@ static void status_task(void *arg) {
       s_alert_active = active;
       s_last_alert_log = now;
       if (active) {
-        struct reading r = {
-            .v = ina226_get_voltage(),
-            .i = ina226_get_current_ma(),
-            .p = ina226_get_power_mw(),
-        };
+        struct reading r;
+        reading_get(&r); /* cached sample keeps button/PWM polling responsive */
         ESP_LOGW(TAG, "INA226 ALERT asserted (OCP) V=%.2f I=%.0fmA P=%.1fW",
                  r.v, r.i, r.p / 1000.0f);
       } else {
@@ -290,10 +283,14 @@ static void status_task(void *arg) {
       s_last_alert_log = now;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(50));
+    if (xTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50)) == pdFALSE) {
+      last_wake = xTaskGetTickCount();
+      vTaskDelay(1);
+    }
   }
 }
 
 void status_task_create(void) {
-  xTaskCreate(status_task, "status", STACK_STATUS, NULL, PRIO_STATUS, NULL);
+  ESP_ERROR_CHECK(xTaskCreate(status_task, "status", STACK_STATUS, NULL,
+                             PRIO_STATUS, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 }

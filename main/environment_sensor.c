@@ -1,13 +1,18 @@
 /* Environmental sampling and ENS160 compensation follow the power mode. */
 #include "environment_sensor.h"
 #include <math.h>
+#include <string.h>
 #include "config.h"
 #include "core.h"
 #include "esp_log.h"
 #include "freertos/task.h"
 
+_Static_assert(pdMS_TO_TICKS(CFG_ENV_INTERVAL_NORMAL_MS) > 0 &&
+               pdMS_TO_TICKS(CFG_ENV_INTERVAL_SAVING_MS) > 0,
+               "environment intervals must be at least one tick");
 static i2c_master_dev_handle_t s_sht, s_ens, s_aht;
 static SemaphoreHandle_t s_lock;
+static TaskHandle_t s_sensor_task;
 static struct environment_reading s_environment_reading = {.error = "not_ready"};
 
 static uint8_t sensor_crc(const uint8_t *data, size_t length) {
@@ -110,6 +115,7 @@ void environment_sensor_get(struct environment_reading *out) {
 static void sensor_task(void *arg) {
   (void)arg;
   bool ens_ready = false, aht_ready = false;
+  unsigned ens_failures = 0;
   const char *previous_error = "not_ready";
   uint32_t last_sample = 0;
   bool first_sample = true;
@@ -121,7 +127,9 @@ static void sensor_task(void *arg) {
     uint32_t interval = saving ? CFG_ENV_INTERVAL_SAVING_MS : CFG_ENV_INTERVAL_NORMAL_MS;
     uint32_t now = now_ms();
     if (!first_sample && now - last_sample < interval) {
-      vTaskDelay(pdMS_TO_TICKS(100));
+      uint32_t remaining = interval - (now - last_sample);
+      TickType_t wait = pdMS_TO_TICKS(remaining);
+      ulTaskNotifyTake(pdTRUE, wait ? wait : 1);
       continue;
     }
     first_sample = false;
@@ -162,14 +170,12 @@ static void sensor_task(void *arg) {
     err = ens_compensate(compensation_t, compensation_rh);
     if (err != ESP_OK) {
       next.error = "ens160_compensation_failed";
-      ens_ready = false;
       goto publish;
     }
     uint8_t status;
     err = ens_read(0x20, &status, 1);
     if (err != ESP_OK) {
       next.error = "ens160_read_failed";
-      ens_ready = false;
       goto publish;
     }
     if ((status & 0x40) || !(status & 0x80)) {
@@ -182,7 +188,6 @@ static void sensor_task(void *arg) {
       err = ens_read(0x21, data, sizeof(data));
       if (err != ESP_OK) {
         next.error = "ens160_read_failed";
-        ens_ready = false;
         goto publish;
       }
       next.aqi = data[0] & 0x07;
@@ -194,16 +199,22 @@ static void sensor_task(void *arg) {
       next.error = "not_ready";
       goto publish;
     }
+    ens_failures = 0;
     next.validity = (status >> 2) & 0x03;
     next.compensation_temperature_c = compensation_t;
     next.compensation_humidity_rh_pct = compensation_rh;
     next.temperature_c = temperature;
     next.humidity_rh_pct = humidity;
-    // Epoch is meaningful only after the existing NTP boot sync succeeds.
+    // Background NTP may not have synchronized yet.
     int64_t epoch = get_epoch_ms();
     next.updated_ms = epoch > 1000000000000LL ? epoch : 0;
     if (next.validity == 3) next.error = "ens160_invalid_output";
 publish:
+    // Retry a transient bus failure without restarting ENS160's warm-up.
+    if (next.error && strncmp(next.error, "ens160_", 7) == 0 &&
+        strcmp(next.error, "ens160_invalid_output") != 0) {
+      if (++ens_failures >= 3) ens_ready = false;
+    }
     if (next.error) next.new_data = false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_environment_reading = next;
@@ -212,7 +223,7 @@ publish:
       ESP_LOGI("environment", "sensor status: %s", next.error ? next.error : "ok");
       previous_error = next.error;
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(1); /* yield even if sensor work overran the sample period */
   }
 }
 
@@ -232,7 +243,7 @@ esp_err_t environment_sensor_start(i2c_master_bus_handle_t bus) {
   config.device_address = CFG_AHT21_ADDR;
   err = i2c_master_bus_add_device(bus, &config, &s_aht);
   if (err != ESP_OK) goto fail;
-  if (xTaskCreate(sensor_task, "environment", 4096, NULL, 2, NULL) != pdPASS) {
+  if (xTaskCreate(sensor_task, "environment", 4096, NULL, 2, &s_sensor_task) != pdPASS) {
     err = ESP_ERR_NO_MEM;
     goto fail;
   }
@@ -244,4 +255,8 @@ fail:
   vSemaphoreDelete(s_lock);
   s_lock = NULL;
   return err;
+}
+
+void environment_sensor_notify_power_change(void) {
+  if (s_sensor_task) xTaskNotifyGive(s_sensor_task);
 }

@@ -16,6 +16,11 @@ static const char *TAG = "U8G2_HAL";
  * OLED, it's simpler and safer to just keep the device handle in a static
  * here, set once from u8g2_esp_hal_init(). */
 static i2c_master_dev_handle_t s_oled_dev;
+static bool s_frame_failed;
+static uint32_t s_last_error_log;
+
+void u8g2_esp_hal_frame_begin(void) { s_frame_failed = false; }
+bool u8g2_esp_hal_frame_ok(void) { return !s_frame_failed; }
 
 /* Byte-level I2C transport for u8g2. u8g2/u8x8 document that they never send
  * more than 32 bytes between U8X8_MSG_BYTE_START_TRANSFER and
@@ -34,6 +39,10 @@ static uint8_t u8x8_byte_esp_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, voi
     case U8X8_MSG_BYTE_SEND: {
         const uint8_t *data = (const uint8_t *)arg_ptr;
         while (arg_int > 0) {
+            if (buf_len >= sizeof(buf)) {
+                s_frame_failed = true;
+                return 0;
+            }
             buf[buf_len++] = *data++;
             arg_int--;
         }
@@ -46,8 +55,17 @@ static uint8_t u8x8_byte_esp_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, voi
         buf_len = 0;
         break;
     case U8X8_MSG_BYTE_END_TRANSFER: {
+        if (s_frame_failed) return 0;
         esp_err_t e = i2c_master_transmit(s_oled_dev, buf, buf_len, 100);
-        if (e != ESP_OK) ESP_LOGE(TAG, "i2c write failed: %s", esp_err_to_name(e));
+        if (e != ESP_OK) {
+            s_frame_failed = true; /* stop the remaining chunks of this failed frame */
+            uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            if (!s_last_error_log || now - s_last_error_log >= 5000u) {
+                ESP_LOGE(TAG, "i2c write failed: %s", esp_err_to_name(e));
+                s_last_error_log = now;
+            }
+            return 0;
+        }
         break;
     }
     default:
