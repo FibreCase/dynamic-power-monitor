@@ -124,7 +124,7 @@ static void oled_live_render(void) {
     return;
   }
 
-  char vbuf[20], ibuf[20], pbuf[20];
+  char electrical[40], tvoc[24], pbuf[20], voltage[20];
   const int width = u8g2_GetDisplayWidth(&s_u8g2);
   u8g2_ClearBuffer(&s_u8g2);
 
@@ -135,20 +135,34 @@ static void oled_live_render(void) {
     snprintf(pbuf, sizeof(pbuf), "%.1fW", p);
   else
     snprintf(pbuf, sizeof(pbuf), "%.0fW", p);
+  snprintf(voltage, sizeof(voltage), "%.2f", r.v);
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont17_tf);
+  int voltage_width = u8g2_GetStrWidth(&s_u8g2, voltage);
+  u8g2_DrawStr(&s_u8g2, width - voltage_width, 28, voltage);
+  u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+  u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, "V"), 10, "V");
   u8g2_SetFont(&s_u8g2, u8g2_font_profont29_tf);
-  if (u8g2_GetStrWidth(&s_u8g2, pbuf) > width)
+  if (u8g2_GetStrWidth(&s_u8g2, pbuf) > width - voltage_width - 6)
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tf);
+  if (u8g2_GetStrWidth(&s_u8g2, pbuf) > width - voltage_width - 6)
     u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
   u8g2_DrawStr(&s_u8g2, 0, 30, pbuf);
   u8g2_DrawHLine(&s_u8g2, 0, 35, width);
 
-  snprintf(vbuf, sizeof(vbuf), "%.2fV", r.v);
-  snprintf(ibuf, sizeof(ibuf), "%.3fA", r.i / 1000.0f);
-  u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
-  u8g2_DrawStr(&s_u8g2, 0, 48, vbuf);
-  u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, ibuf), 48, ibuf);
-
   struct environment_reading environment;
   environment_sensor_get(&environment);
+  snprintf(electrical, sizeof(electrical), "%.2fA", r.i / 1000.0f);
+  if (environment.available)
+    snprintf(tvoc, sizeof(tvoc), "TVOC %u", (unsigned)environment.tvoc_ppb);
+  else
+    snprintf(tvoc, sizeof(tvoc), "TVOC --");
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
+  if (environment.available &&
+      u8g2_GetStrWidth(&s_u8g2, electrical) + u8g2_GetStrWidth(&s_u8g2, tvoc) + 2 > width)
+    snprintf(tvoc, sizeof(tvoc), "TVOC %uk", ((unsigned)environment.tvoc_ppb + 500u) / 1000u);
+  u8g2_DrawStr(&s_u8g2, 0, 48, electrical);
+  u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, tvoc), 48, tvoc);
+
   oled_footer_render(&environment);
 
   u8g2_SendBuffer(&s_u8g2);

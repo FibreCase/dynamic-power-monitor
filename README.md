@@ -86,7 +86,7 @@ This policy applies at GPIO initialization and updates every 50ms as power or co
 
 Reboot defaults to radar control and power UI. Selections are not persisted. ECO always shows environment; returning to PWR restores the selected UI.
 
-- **Power UI:** large power above voltage/current, with power/control modes (e.g. `PWR | RA`) left and AQI right below.
+- **Power UI:** large power above a left-aligned voltage/current pair (e.g. `4.96V | 2.49A`) and right-aligned TVOC, with power/control modes (e.g. `PWR | RA`) left and AQI right below.
 - **Environment UI:** large temperature upper left, smaller CO₂ digits with `ppm` upper right; humidity left/TVOC (ppb) right on the next row; power/control modes (e.g. `PWR | RA`) left and ENS160 AQI right at the bottom.
 - **Data quality:** `--` before data arrives, warm-up/startup indicators, and `STALE` on cached readings after read failures.
 
@@ -337,3 +337,11 @@ powered, but does not serve sensor/OTA HTTP endpoints.
 
 OFF forces both outputs to 0%, selectable by IO9, web or `?mode=OFF`.
 Parameterless API still cycles only RA/BL. Power transitions reset RA; stored duties remain.
+
+Power UI current uses two decimals. Long rows remove separator spaces, then
+abbreviate TVOC as integer k ppb if needed, keeping the lower-row font size.
+
+Both power and environment UI show `TVOC 12`, without ppb. The API `tvoc_ppb` field and units are unchanged.
+
+Power UI places voltage upper right, with a small V label above 17px digits.
+Large power remains upper left; current/TVOC occupy the next row, modes/AQI the bottom.
