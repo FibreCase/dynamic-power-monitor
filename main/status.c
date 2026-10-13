@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,6 +20,7 @@
 #include "config.h"
 #include "core.h"
 #include "ina226.h"
+#include "pwm_settings.h"
 
 static const char *TAG = "power-mon";
 
@@ -31,12 +33,54 @@ static atomic_int s_nmos_mode = ATOMIC_VAR_INIT(NMOS_RA);
 static volatile int s_alert_active = 0;
 static uint32_t s_last_alert_log = 0;
 
+#define PWM_MODE LEDC_LOW_SPEED_MODE
+#define PWM_TIMER LEDC_TIMER_0
+#define PWM_RESOLUTION LEDC_TIMER_8_BIT
+static const ledc_channel_t s_pwm_channels[] = {LEDC_CHANNEL_0, LEDC_CHANNEL_1};
+
+static void pwm_init(void) {
+  const ledc_timer_config_t timer = {
+      .speed_mode = PWM_MODE,
+      .duty_resolution = PWM_RESOLUTION,
+      .timer_num = PWM_TIMER,
+      .freq_hz = CFG_NMOS_PWM_FREQ_HZ,
+      .clk_cfg = LEDC_AUTO_CLK,
+  };
+  ESP_ERROR_CHECK(ledc_timer_config(&timer));
+  const int pins[] = {CFG_NMOS_CTL1_PIN, CFG_NMOS_CTL2_PIN};
+  for (unsigned i = 0; i < 2; ++i) {
+    const ledc_channel_config_t channel = {
+        .gpio_num = pins[i], .speed_mode = PWM_MODE,
+        .channel = s_pwm_channels[i], .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = PWM_TIMER, .duty = 0, .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&channel));
+  }
+}
+
+static void pwm_set(unsigned output, unsigned duty_pct) {
+  static int previous[] = {-1, -1};
+  if (previous[output] == (int)duty_pct) return;
+  ledc_channel_t channel = s_pwm_channels[output];
+  if (duty_pct == 0 || duty_pct == 100) {
+    ESP_ERROR_CHECK(ledc_stop(PWM_MODE, channel, duty_pct == 100));
+  } else {
+    unsigned duty = (256u * duty_pct + 50u) / 100u;
+    ESP_ERROR_CHECK(ledc_set_duty(PWM_MODE, channel, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(PWM_MODE, channel));
+  }
+  previous[output] = duty_pct;
+}
+
 static void nmos_set_outputs(bool presence, bool saving) {
   enum nmos_mode mode = nmos_control_mode();
-  bool ctl1 = mode == NMOS_ON || presence;
+  bool ctl1 = mode != NMOS_OFF && (mode == NMOS_ON || presence);
   bool ctl2 = mode == NMOS_ON || (mode == NMOS_RA && !saving && presence);
-  ESP_ERROR_CHECK(gpio_set_level(CFG_NMOS_CTL1_PIN, ctl1 ? 1 : 0));
-  ESP_ERROR_CHECK(gpio_set_level(CFG_NMOS_CTL2_PIN, ctl2 ? 1 : 0));
+  struct pwm_settings settings;
+  pwm_settings_get(&settings);
+  bool adjustable = !saving && mode != NMOS_ON;
+  pwm_set(0, !ctl1 ? 0u : adjustable ? settings.ctl1 : 100u);
+  pwm_set(1, !ctl2 ? 0u : adjustable ? settings.ctl2 : 100u);
 }
 
 void status_init_gpio(void) {
@@ -64,15 +108,8 @@ void status_init_gpio(void) {
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   bool saving = s_power_saving;
   xSemaphoreGive(s_mutex);
+  pwm_init();
   nmos_set_outputs(radar_presence_detected(), saving);
-  gpio_config_t nmos = {
-      .pin_bit_mask = (1ULL << CFG_NMOS_CTL2_PIN) | (1ULL << CFG_NMOS_CTL1_PIN),
-      .mode = GPIO_MODE_OUTPUT,
-      .pull_up_en = GPIO_PULLUP_DISABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE,
-  };
-  ESP_ERROR_CHECK(gpio_config(&nmos));
 
 
 
@@ -121,12 +158,13 @@ const char *nmos_control_mode_name(void) {
   switch (nmos_control_mode()) {
   case NMOS_ON: return "ON";
   case NMOS_BL: return "BL";
+  case NMOS_OFF: return "OFF";
   default: return "RA";
   }
 }
 
 esp_err_t nmos_control_set_mode(enum nmos_mode mode) {
-  if (mode != NMOS_RA && mode != NMOS_ON && mode != NMOS_BL)
+  if (mode != NMOS_RA && mode != NMOS_ON && mode != NMOS_BL && mode != NMOS_OFF)
     return ESP_ERR_INVALID_ARG;
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   if (s_power_saving || s_boot_loading) {
@@ -135,7 +173,7 @@ esp_err_t nmos_control_set_mode(enum nmos_mode mode) {
   }
   atomic_store(&s_nmos_mode, mode);
   xSemaphoreGive(s_mutex);
-  ESP_LOGI(TAG, "NMOS API mode: %s", mode == NMOS_RA ? "RA" : mode == NMOS_ON ? "ON" : "BL");
+  ESP_LOGI(TAG, "NMOS API mode: %s", mode == NMOS_RA ? "RA" : mode == NMOS_ON ? "ON" : mode == NMOS_BL ? "BL" : "OFF");
   return ESP_OK;
 }
 
@@ -200,7 +238,8 @@ static void status_task(void *arg) {
           bool saving = s_power_saving;
           enum nmos_mode current = atomic_load(&s_nmos_mode);
           enum nmos_mode next = current == NMOS_RA ? NMOS_ON :
-              (current == NMOS_ON && !saving ? NMOS_BL : NMOS_RA);
+              current == NMOS_ON ? (saving ? NMOS_OFF : NMOS_BL) :
+              current == NMOS_BL ? NMOS_OFF : NMOS_RA;
           atomic_store(&s_nmos_mode, next);
           xSemaphoreGive(s_mutex);
           ESP_LOGI(TAG, "NMOS mode: %s", nmos_control_mode_name());

@@ -7,6 +7,7 @@
 #include "environment_sensor.h"
 #include "sample_task.h"
 #include "status.h"
+#include "pwm_settings.h"
 #include "temp_sensor.h"
 #include "u8g2_esp_hal.h"
 #include "wifi_ntp.h"
@@ -59,7 +60,6 @@ void app_main(void) {
 
   // Synchronisation primitives, created before any task is started.
   ESP_ERROR_CHECK(core_init());
-  status_init_gpio(); // Radar + NMOS gates + LED output + ALERT input
 
   e = init_i2c();
   if (e != ESP_OK) {
@@ -91,9 +91,12 @@ void app_main(void) {
   e = nvs_flash_init();
   if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     ESP_ERROR_CHECK(nvs_flash_erase());
-    ESP_ERROR_CHECK(nvs_flash_init());
+    e = nvs_flash_init();
   }
 
+  ESP_ERROR_CHECK(e);
+  ESP_ERROR_CHECK(pwm_settings_init());
+  status_init_gpio(); // Persistent duties restored before enabling outputs.
   ESP_ERROR_CHECK(wifi_background_start());
 
   // Internal die-temperature sensor. Best effort: if it fails to come up the

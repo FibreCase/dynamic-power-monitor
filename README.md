@@ -15,8 +15,8 @@ This README describes the current `5v` branch. The build project name remains `e
 | IO0 | HLK-LD2410C-P OUT | Internal pull-down; HIGH occupied, LOW empty |
 | IO3 | INA226 ALERT | Internal pull-up; active LOW, local overcurrent log |
 | IO4 / IO5 | I²C SDA / SCL | Shared sensor/display bus |
-| IO6 | NMOS CTL2 | HIGH on, LOW off |
-| IO7 | NMOS CTL1 | HIGH on, LOW off |
+| IO6 | NMOS CTL2 | 20kHz PWM, off 0%, adjustable on duty |
+| IO7 | NMOS CTL1 | 20kHz PWM, off 0%, adjustable on duty |
 | IO8 | Status LED | Active HIGH; off in ECO, on with WiFi in PWR |
 | IO9 | Button | Internal pull-up; connect button to GND, active LOW |
 | IO18 / IO19 | Native USB Serial/JTAG | D− / D+, flashing and logs |
@@ -38,7 +38,7 @@ SHT40 uses the datasheet conversion with **no fixed temperature offset or additi
 
 ## Startup and power modes
 
-Power modes are **PWR (standard)** and **ECO (power saving)**, independent of RA/ON/BL output control.
+Power modes are **PWR (standard)** and **ECO (power saving)**, independent of RA/ON/BL/OFF output control.
 
 Startup initializes local I²C/peripherals and always enters ECO mode. After OLED initialization, `Loading...` stays visible throughout startup and for **2 seconds after startup completes**. Live UI and automatic mode decisions then begin.
 
@@ -63,12 +63,12 @@ IO9 uses 50ms debounce and a 1-second long-press threshold.
 
 | Action | Result |
 |---|---|
-| Short press, on release | Cycle control mode (PWR RA/ON/BL, ECO RA/ON) |
+| Short press, on release | Cycle control mode (PWR RA/ON/BL/OFF, ECO RA/ON/OFF) |
 | Hold 1 second in PWR mode | Toggle power / environment UI once per hold |
 | Long hold during ECO or Loading | No UI change and no short-press action |
 
-Control modes are `RA`, `ON`, `BL`; PWR/ECO are separate power modes.
-Short presses cycle `RA → ON → BL → RA` in PWR mode, `RA ↔ ON` in ECO.
+Control modes are `RA`, `ON`, `BL`, `OFF`; PWR/ECO are separate power modes.
+Short presses cycle `RA → ON → BL → OFF → RA` in PWR mode, `RA → ON → OFF → RA` in ECO.
 BL is PWR-only. Every `PWR ↔ ECO` transition resets control mode to `RA`,
 including previous ON or BL selections. Unchanged power mode does not reset it.
 
@@ -79,6 +79,7 @@ IO9 always-on overrides the power-mode restrictions:
 | RA | ECO (including startup) | On if occupied, off if empty | Always off |
 | RA | PWR | On if occupied, off if empty | On if occupied, off if empty |
 | ON | Any | Always on | Always on |
+| OFF | Any | Always off | Always off |
 | BL | PWR | On if occupied, off if empty | Always off |
 
 This policy applies at GPIO initialization and updates every 50ms as power or control mode changes. Releasing a long hold does not toggle NMOS control.
@@ -93,7 +94,7 @@ Both modes and Loading use full OLED brightness (contrast 255). The LED is alway
 
 ## Configure, build and flash
 
-ESP-IDF v6.0.1, target `esp32c3`, with a partition table for 4MB flash. Initialize the display submodule; no Python backend is required:
+ESP-IDF v6.0.1, target `esp32c3`, with a partition table for 4MB flash. Initialize the display submodule:
 
 ```sh
 git submodule update --init --recursive components/u8g2
@@ -186,9 +187,31 @@ Without new gas data, the snapshot retains previous gas values while updating te
 
 Not-ready, read/CRC/device errors and invalid output return HTTP 503 with `status: "error"` and an error identifier. Read failures preserve the last successful snapshot/time and set `new_data: false`; before the first snapshot `reading: null`. The task retries automatically. Error identifiers include `not_ready`, `sht40_crc_error`, `sht40_read_failed`, `aht21_init_failed`, `aht21_crc_error`, `aht21_read_failed`, `ens160_init_failed`, `ens160_compensation_failed`, `ens160_read_failed`, `ens160_device_error`, `ens160_invalid_output`.
 
+### Web control / GET /api/v1/control
+
+Open `http://power-monitor.lan/` (or the device IP) in PWR. A four-position
+slider selects `RA / BL / ON / OFF` on release. State synchronizes every 5 seconds
+and with the refresh button, including IO9 changes. Network failures disable
+the slider until synchronization succeeds. ECO stops the page and API.
+
+`web/index.html` is standalone, with no CDN dependencies. The build runs
+`web/compress.py` to gzip and embed it; GET / serves `Content-Encoding: gzip`.
+Rebuilding after editing HTML updates the firmware page without file uploads.
+
+```sh
+curl http://power-monitor.lan/api/v1/control
+curl --compressed http://power-monitor.lan/
+```
+
+GET queries without changing mode:
+
+```json
+{"status":"ok","power_mode":"PWR","control_mode":"RA"}
+```
+
 ### POST /api/v1/control
 
-Omit `mode` to cycle `RA ↔ BL`; from ON, the next mode is RA.
+Omit `mode` to cycle `RA ↔ BL`; from ON or OFF, the next mode is RA.
 Explicit `?mode=ON` remains supported; IO9 cycling is unchanged.
 
 ```sh
@@ -196,8 +219,8 @@ curl -X POST http://power-monitor.lan/api/v1/control
 ```
 
 
-Set control mode in PWR only. Optional, case-sensitive `mode` is `RA`, `ON` or
-`BL`. No body is needed. Outputs apply on the next status update (about 50ms),
+Set control mode in PWR only. Optional, case-sensitive `mode` is `RA`, `ON`, `BL` or
+`OFF`. No body is needed. Outputs apply on the next status update (about 50ms),
 and the UI reflects the shared mode.
 
 ```sh
@@ -216,6 +239,37 @@ Invalid/empty mode returns HTTP 400 with `error: "invalid_control_mode"`.
 If the device enters ECO/Loading while processing, HTTP 409 returns
 `error: "pwr_required"`; HTTP itself is stopped in ECO. API and IO9 share the
 same state; the latest setting wins and is not persisted. Every power-mode transition resets control mode to RA.
+
+### PWM duties / GET and POST /api/v1/pwm
+
+CTL1 (IO7) and CTL2 (IO6) use LEDC 20kHz/8-bit PWM. Each output stores one
+0–100% duty shared between PWR RA and BL:
+
+- PWR RA uses each saved duty when radar enables the output.
+- PWR BL uses CTL1's saved duty when occupied; CTL2 stays off.
+- ON forces both to 100%, ignoring saved duties.
+- ECO retains its output rules: enabled outputs are 100%, disabled outputs 0%.
+
+The page has two duty sliders. Dragging previews only; Save applies and commits
+to NVS. Unchanged values do not rewrite flash; failed saves leave running values
+unchanged. Duties restore after reboot; control mode still starts at RA.
+Without an NVS record, defaults are `CFG_CTL1_PWM_DUTY_PCT` and
+`CFG_CTL2_PWM_DUTY_PCT` (both 100). `CFG_NMOS_PWM_FREQ_HZ` controls the shared
+timer frequency. 100% is steady HIGH; 0% steady LOW.
+
+```sh
+curl http://power-monitor.lan/api/v1/pwm
+curl -X POST 'http://power-monitor.lan/api/v1/pwm?ctl1=35&ctl2=65'
+```
+
+```json
+{"status":"ok","frequency_hz":20000,"ctl1_duty_pct":35,"ctl2_duty_pct":65}
+```
+
+POST requires both ctl1 and ctl2 as integers 0–100. Invalid parameters return
+400 `invalid_pwm_duty`; NVS failure returns 500 `pwm_save_failed`; ECO/loading
+returns 409 `pwr_required`. GET returns saved configuration, not effective duty
+for outputs currently disabled by radar or mode policy.
 
 ### POST /api/ota/update
 
@@ -263,7 +317,7 @@ After writing and validating the inactive slot, OTA compares complete applicatio
 | `main/config.h.example` | Hardware/network template |
 | `sdkconfig.defaults` / `partitions.csv` | USB console, system configuration and OTA slots |
 
-`components/u8g2` is the display library submodule. The retained `python/` submodule is legacy host tooling and is not required to build or run this project.
+`components/u8g2` is the display library submodule.
 
 ## License
 
@@ -280,3 +334,6 @@ CO₂ digits only. The `ppm` label stays unchanged; normal operation removes the
 A separate background task controls HTTP start/stop without blocking power
 sampling or mode decisions. ECO may attempt WiFi connection when externally
 powered, but does not serve sensor/OTA HTTP endpoints.
+
+OFF forces both outputs to 0%, selectable by IO9, web or `?mode=OFF`.
+Parameterless API still cycles only RA/BL. Power transitions reset RA; stored duties remain.

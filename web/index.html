@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>5V 控制器</title>
+<style>
+:root{color-scheme:light dark;--bg:#f2f6ef;--text:#17251b;--muted:#526858;--card:#fff;--border:#d5dfd2;--accent:#356b22;--badge:#e3efdd;--badge-text:#356b22;--detail:#344d3b;--error:#a22a23;--rail:#d7e3d0;--thumb-border:#fff;--footer:#647969}
+@media(prefers-color-scheme:dark){:root{--bg:#111613;--text:#edf5ee;--muted:#a4b4a7;--card:#1a231d;--border:#334338;--accent:#c3ed9d;--badge:#24352a;--badge-text:#abd7b4;--detail:#cad6cc;--error:#ffb4a8;--rail:#3c4e3f;--thumb-border:#1a231d;--footer:#91a496}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;min-height:100vh;min-height:100svh;display:grid;place-items:center;padding:24px}
+.panel{width:min(100%,460px)}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px}
+.brand{font-size:14px;color:var(--muted);letter-spacing:.06em}.badge{font-size:12px;color:var(--badge-text);background:var(--badge);padding:6px 10px;border-radius:20px}
+h1{font-size:32px;font-weight:600;letter-spacing:-.04em;margin:0 0 10px}.intro{color:var(--muted);line-height:1.6;margin:0 0 32px}
+.card+.card{margin-top:20px}.pwm-row{margin-top:20px}.pwm-note{font-size:13px;color:var(--muted);line-height:1.6}.percent{color:var(--accent);font-weight:600}.card{background:var(--card);border:1px solid var(--border);border-radius:22px;padding:28px}.row{display:flex;align-items:center;justify-content:space-between}
+.caption{font-size:13px;color:var(--muted)}.mode{font-size:32px;font-weight:600;color:var(--accent)}
+.slider{appearance:none;-webkit-appearance:none;width:100%;height:64px;background:transparent;cursor:pointer;margin:24px 0 6px;touch-action:pan-y;accent-color:var(--accent)}
+.slider::-webkit-slider-runnable-track{height:12px;background:var(--rail);border-radius:12px}
+.slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:44px;height:44px;border-radius:50%;background:var(--accent);border:4px solid var(--thumb-border);box-shadow:0 2px 8px #0003;margin-top:-16px}
+.slider::-moz-range-track{height:12px;background:var(--rail);border-radius:12px}
+.slider::-moz-range-thumb{width:36px;height:36px;border-radius:50%;background:var(--accent);border:4px solid var(--thumb-border);box-shadow:0 2px 8px #0003}
+.slider:focus-visible{outline:3px solid var(--accent);outline-offset:5px;border-radius:14px}
+.slider:disabled{opacity:.4;cursor:wait}.labels{display:flex;justify-content:space-between;font-size:16px;color:var(--muted)}.labels span.active{color:var(--accent);font-weight:600}
+.detail{min-height:48px;margin:24px 0 0;line-height:1.6;font-size:14px;color:var(--detail)}.status{min-height:42px;font-size:13px;line-height:1.5;color:var(--muted);margin:18px 0}.status.error{color:var(--error)}
+button{min-height:44px;border:1px solid var(--border);background:transparent;color:var(--detail);border-radius:10px;padding:10px 18px;font:inherit;font-size:14px;cursor:pointer}button:disabled{opacity:.4}
+footer{font-size:12px;color:var(--footer);margin-top:24px;line-height:1.6}
+@media(max-width:420px){body{padding:20px}.card{padding:24px}header{margin-bottom:28px}}
+</style>
+</head>
+<body>
+<main class="panel">
+<header><span class="brand">5V CONTROLLER</span><span id="power" class="badge">连接中</span></header>
+<h1>输出控制</h1><p class="intro">选择控制模式，设备立即应用。</p>
+<section class="card" aria-label="控制模式">
+<div class="row"><span class="caption">当前模式</span><output id="mode" class="mode" for="slider">--</output></div>
+<input id="slider" class="slider" type="range" min="0" max="3" step="1" value="0" aria-label="选择 RA、BL、ON 或 OFF 模式" disabled>
+<div class="labels" aria-hidden="true"><span>RA</span><span>BL</span><span>ON</span><span>OFF</span></div>
+<p id="detail" class="detail">正在读取设备状态…</p>
+</section>
+<section class="card" aria-label="PWM 占空比">
+<div class="row"><span>输出占空比</span><span class="caption">20 kHz</span></div>
+<p class="pwm-note">PWR 的 RA / BL 共用设置。ON 和 ECO 开启的输出固定为 100%；被规则关闭的输出保持 0%。</p>
+<div class="row pwm-row"><label for="duty1">CTL1</label><output id="percent1" class="percent" for="duty1">--%</output></div>
+<input id="duty1" class="slider" type="range" min="0" max="100" step="1" value="100" disabled>
+<div class="row"><label for="duty2">CTL2</label><output id="percent2" class="percent" for="duty2">--%</output></div>
+<input id="duty2" class="slider" type="range" min="0" max="100" step="1" value="100" disabled>
+<button id="save" type="button" disabled>保存占空比</button>
+<p class="pwm-note">点击保存后应用并写入设备，重启后保留。</p>
+</section>
+<p id="status" class="status" role="status" aria-live="polite">连接设备中…</p>
+<button id="refresh" type="button">重新同步</button>
+<footer>仅 PWR 下可访问。电源模式切换后控制模式自动回到 RA。</footer>
+</main>
+<script>
+ 'use strict';
+const modes=['RA','BL','ON','OFF'];
+const descriptions={RA:'雷达控制 · 有人时两路开启，无人时关闭。',BL:'单路雷达控制 · CTL1 跟随雷达，CTL2 始终关闭。',ON:'常开 · 两路持续高电平，固定 100%。',OFF:'关闭 · CTL1、CTL2 均保持关闭。'};
+const $=id=>document.getElementById(id);
+const slider=$('slider'),mode=$('mode'),detail=$('detail'),status=$('status'),power=$('power'),refresh=$('refresh'),duty1=$('duty1'),duty2=$('duty2'),save=$('save');
+let confirmed=null,busy=false,dragging=false,connected=false,dirty=false;
+function controls(){slider.disabled=!connected||busy;duty1.disabled=duty2.disabled=!connected||busy;save.disabled=!connected||busy||!dirty;refresh.disabled=busy;}
+function show(value){mode.textContent=value;detail.textContent=descriptions[value];slider.value=String(modes.indexOf(value));slider.setAttribute('aria-valuetext',value);document.querySelectorAll('.labels span').forEach(el=>el.classList.toggle('active',el.textContent===value));}
+function showDuties(data){if(!Number.isInteger(data.ctl1_duty_pct)||!Number.isInteger(data.ctl2_duty_pct)||data.ctl1_duty_pct<0||data.ctl1_duty_pct>100||data.ctl2_duty_pct<0||data.ctl2_duty_pct>100)throw Error('invalid_settings');duty1.value=data.ctl1_duty_pct;duty2.value=data.ctl2_duty_pct;percentages();}
+function percentages(){$('percent1').textContent=duty1.value+'%';$('percent2').textContent=duty2.value+'%';}
+function message(text,error=false){status.textContent=text;status.classList.toggle('error',error);}
+async function request(url,options={}){const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),4000);try{const response=await fetch(url,{...options,cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||data.status!=='ok')throw Error(data.error||'request_failed');return data;}finally{clearTimeout(timeout);}}
+function validateMode(data){if(!modes.includes(data.control_mode)||data.power_mode!=='PWR')throw Error('pwr_required');return data.control_mode;}
+async function sync(){if(busy||dragging)return;busy=true;controls();try{const [state,pwm]=await Promise.all([request('/api/v1/control'),request('/api/v1/pwm')]);confirmed=validateMode(state);show(confirmed);if(!dirty)showDuties(pwm);connected=true;power.textContent='PWR';if(!dirty)message('已与设备同步');}catch(error){connected=false;power.textContent='离线';message('无法连接设备，请确认处于 PWR 模式后重新同步。',true);}finally{busy=false;controls();}}
+for(const input of [slider,duty1,duty2]){input.addEventListener('pointerdown',()=>{dragging=true;});input.addEventListener('pointercancel',()=>{dragging=false;});}
+window.addEventListener('pointerup',()=>{dragging=false;});
+slider.addEventListener('input',()=>{show(modes[Number(slider.value)]);message('松开滑块后应用');});
+slider.addEventListener('change',async()=>{dragging=false;if(busy){if(confirmed)show(confirmed);return;}const desired=modes[Number(slider.value)];if(desired===confirmed){message('模式未改变');return;}busy=true;controls();message('正在应用 '+desired+'…');try{const data=await request('/api/v1/control?mode='+encodeURIComponent(desired),{method:'POST'});confirmed=validateMode(data);show(confirmed);message('已切换到 '+confirmed);}catch(error){if(confirmed)show(confirmed);connected=false;power.textContent='待同步';message('切换结果未确认，请重新同步后再操作。',true);}finally{busy=false;controls();}});
+for(const input of [duty1,duty2]){input.addEventListener('input',()=>{dirty=true;percentages();controls();message('占空比尚未保存');});input.addEventListener('change',()=>{dragging=false;});}
+save.addEventListener('click',async()=>{if(busy||!connected||!dirty)return;busy=true;controls();message('正在保存占空比…');try{const data=await request('/api/v1/pwm?ctl1='+encodeURIComponent(duty1.value)+'&ctl2='+encodeURIComponent(duty2.value),{method:'POST'});showDuties(data);dirty=false;message('占空比已保存，重启后保留');}catch(error){message(error.message==='pwm_save_failed'?'设备保存失败，设置未应用，请重试。':'保存结果未确认，请重新同步设备状态。',true);connected=false;power.textContent='待同步';}finally{busy=false;controls();}});
+refresh.addEventListener('click',()=>{dirty=false;return sync();});
+sync();setInterval(sync,5000);
+</script>
+</body>
+</html>

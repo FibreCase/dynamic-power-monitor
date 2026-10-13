@@ -16,8 +16,8 @@
 | IO3 | INA226 ALERT | 内部上拉；低电平过流告警，记录本地日志 |
 | IO4 | I²C SDA | 与下列传感器及 OLED 共用总线 |
 | IO5 | I²C SCL | 与下列传感器及 OLED 共用总线 |
-| IO6 | NMOS CTL2 | 高电平导通、低电平关闭 |
-| IO7 | NMOS CTL1 | 高电平导通、低电平关闭 |
+| IO6 | NMOS CTL2 | 20kHz PWM，关闭 0%，开启占空比可调 |
+| IO7 | NMOS CTL1 | 20kHz PWM，关闭 0%，开启占空比可调 |
 | IO8 | 状态 LED | 高电平点亮；ECO模式熄灭，PWR模式连接 WiFi 时常亮 |
 | IO9 | 按键 | 内部上拉，按键另一端接 GND，低电平按下 |
 | IO18 / IO19 | 内置 USB Serial/JTAG | D− / D+，下载与日志调试 |
@@ -64,12 +64,12 @@ IO9 默认消抖时间为 50ms，长按阈值为 1 秒。
 
 | 操作 | 功能 |
 |---|---|
-| 短按松开 | 切换控制模式（PWR RA/ON/BL，ECO RA/ON） |
+| 短按松开 | 切换控制模式（PWR RA/ON/BL/OFF，ECO RA/ON/OFF） |
 | PWR模式长按 1 秒 | 切换功率界面 / 环境界面，每次长按只切换一次 |
 | ECO或 Loading 阶段长按 | 不切换界面，也不触发 NMOS 短按操作 |
 
-控制模式为 `RA`、`ON`、`BL`；PWR/ECO属于独立的电源模式。
-PWR模式短按顺序为 `RA → ON → BL → RA`，ECO模式只切换 `RA ↔ ON`。
+控制模式为 `RA`、`ON`、`BL`、`OFF`；PWR/ECO属于独立的电源模式。
+PWR模式短按顺序为 `RA → ON → BL → OFF → RA`，ECO模式只切换 `RA → ON → OFF → RA`。
 `BL` 仅在 PWR 有效。每次 `PWR ↔ ECO` 切换，控制模式都重置为 `RA`，
 包括之前处于 ON 或 BL 的情况；电源模式不变时不重置。
 
@@ -80,6 +80,7 @@ NMOS 输出规则如下；IO9 切到常开优先于电源模式限制：
 | RA | ECO（含启动） | 有人导通，无人关闭 | 始终关闭 |
 | RA | PWR | 有人导通，无人关闭 | 有人导通，无人关闭 |
 | ON | 任意模式 | 始终导通 | 始终导通 |
+| OFF | 任意模式 | 始终关闭 | 始终关闭 |
 | BL | PWR | 有人导通，无人关闭 | 始终关闭 |
 
 GPIO 初始化即应用上述规则，运行时每 50ms 更新，电源或按键模式变化自动生效。长按松开不会再触发短按。
@@ -94,7 +95,7 @@ GPIO 初始化即应用上述规则，运行时每 50ms 更新，电源或按键
 
 ## 配置、构建与刷写
 
-使用 ESP-IDF v6.0.1，目标 `esp32c3`，当前分区表适配 4MB Flash。初始化显示库子模块即可，不需要启动 Python 后端：
+使用 ESP-IDF v6.0.1，目标 `esp32c3`，当前分区表适配 4MB Flash。初始化显示库子模块：
 
 ```sh
 git submodule update --init --recursive components/u8g2
@@ -185,9 +186,31 @@ ENS160 没有新气体数据时，保留之前气体读数并更新温湿度。�
 
 未就绪、读取/CRC/设备错误或无效输出返回 HTTP 503、`status: "error"` 和错误标识。读取失败保留最后成功快照与时间戳并设置 `new_data: false`；首次无快照时 `reading: null`。任务自动重试。错误包括 `not_ready`、`sht40_crc_error`、`sht40_read_failed`、`aht21_init_failed`、`aht21_crc_error`、`aht21_read_failed`、`ens160_init_failed`、`ens160_compensation_failed`、`ens160_read_failed`、`ens160_device_error`、`ens160_invalid_output`。
 
+### 网页控制 / GET /api/v1/control
+
+PWR 下打开 `http://power-monitor.lan/`，或使用设备 IP。页面提供四档滑块，
+按 `RA / BL / ON / OFF` 排列，松开后设置对应模式。每 5 秒自动同步，
+也可点击“重新同步”；IO9 操作同样反映在页面上。断连后禁用滑块，
+恢复 PWR 后可重新同步。ECO 下网页和 API 均关闭。
+
+`web/index.html` 为单文件页面，不依赖 CDN。构建时由 `web/compress.py`
+生成 gzip，嵌入固件并通过根路径返回 `Content-Encoding: gzip`。
+修改 HTML 后重新构建即可更新页面，无需额外上传文件。
+
+```sh
+curl http://power-monitor.lan/api/v1/control
+curl --compressed http://power-monitor.lan/
+```
+
+GET 控制接口只查询、不切换：
+
+```json
+{"status":"ok","power_mode":"PWR","control_mode":"RA"}
+```
+
 ### POST /api/v1/control
 
-不带 `mode` 时仅轮换 `RA ↔ BL`，当前为 ON 时下一次切到 RA。
+不带 `mode` 时仅轮换 `RA ↔ BL`，当前为 ON 或 OFF 时下一次切到 RA。
 仍可通过 `?mode=ON` 显式选择 ON；IO9 的短按顺序保持不变。
 
 ```sh
@@ -195,7 +218,7 @@ curl -X POST http://power-monitor.lan/api/v1/control
 ```
 
 
-仅 PWR 下可设置控制模式，`mode` 可选且区分大小写，取值 `RA`、`ON` 或 `BL`。
+仅 PWR 下可设置控制模式，`mode` 可选且区分大小写，取值 `RA`、`ON`、`BL` 或 `OFF`。
 无需请求体，输出在状态任务下一次更新时生效（约 50ms），屏幕同步显示。
 
 ```sh
@@ -214,6 +237,36 @@ curl -X POST 'http://power-monitor.lan/api/v1/control?mode=BL'
 若处理请求时设备已进入 ECO/Loading，返回 HTTP 409，`error: "pwr_required"`；
 ECO 下 HTTP 服务本身关闭。API 与 IO9 共享状态，最后一次设置生效，
 不持久化；任何电源模式切换都会将控制模式重置为 RA。
+
+### PWM 占空比 / GET、POST /api/v1/pwm
+
+CTL1（IO7）和 CTL2（IO6）均使用 LEDC 20kHz、8 位 PWM。每路分别保存
+一个 0–100% 占空比，PWR 的 RA / BL 共用，不按模式分别保存：
+
+- PWR RA：两路在雷达允许开启时使用各自保存的占空比。
+- PWR BL：CTL1 在有人时使用其保存占空比，CTL2 始终关闭。
+- ON：两路固定 100%，不使用保存值。
+- ECO：原有开关规则不变，允许开启的输出固定 100%，被关闭的输出为 0%。
+
+网页增加两个占空比滑块。拖动只预览，点击“保存占空比”后应用并写入 NVS。
+相同值不重复写 Flash，保存失败不更新运行值。重启恢复占空比；控制模式
+仍默认 RA。NVS 尚无配置时使用 `CFG_CTL1_PWM_DUTY_PCT` /
+`CFG_CTL2_PWM_DUTY_PCT` 默认值（均 100）。频率由 `CFG_NMOS_PWM_FREQ_HZ`
+配置，两路共用定时器。100% 持续高电平，0% 持续低电平。
+
+```sh
+curl http://power-monitor.lan/api/v1/pwm
+curl -X POST 'http://power-monitor.lan/api/v1/pwm?ctl1=35&ctl2=65'
+```
+
+```json
+{"status":"ok","frequency_hz":20000,"ctl1_duty_pct":35,"ctl2_duty_pct":65}
+```
+
+POST 必须同时指定 ctl1、ctl2，使用 0–100 的整数；非法参数返回 400
+`invalid_pwm_duty`，NVS 保存失败返回 500 `pwm_save_failed`，
+非 PWR/启动阶段返回 409 `pwr_required`。GET 返回保存的配置值，
+不代表被雷达/模式规则关闭的输出当前实际占空比。
 
 ### POST /api/ota/update
 
@@ -261,7 +314,7 @@ OTA 写入备用槽并完整校验后，比较新旧应用镜像 **SHA-256**。�
 | `main/config.h.example` | 硬件/网络配置模板 |
 | `sdkconfig.defaults` / `partitions.csv` | USB 控制台、系统配置及 OTA 分区 |
 
-`components/u8g2` 是显示库子模块。仓库中的 `python/` 是保留的旧上位机子模块，不参与此项目运行或构建。
+`components/u8g2` 是显示库子模块。
 
 ## 许可证
 
@@ -276,3 +329,6 @@ ENS160 处于 `startup` 或 `warmup` 时，环境界面的 CO₂ 数字加删除
 
 HTTP 启停由独立后台任务负责，不阻塞 INA226 采样或电源模式判断。
 ECO 下仍允许按供电条件后台连接 WiFi，但不提供传感器/OTA HTTP 接口。
+
+OFF 将两路输出固定为 0%，可通过 IO9、网页或 `?mode=OFF` 选择。
+无参数 API 仍仅轮换 RA/BL，电源模式切换仍重置 RA，占空比设置保留。

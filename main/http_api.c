@@ -6,6 +6,8 @@
 #include "environment_sensor.h"
 #include "core.h"
 #include "status.h"
+#include "pwm_settings.h"
+#include "config.h"
 #include "esp_log.h"
 #include "freertos/task.h"
 #include "esp_http_server.h"
@@ -114,6 +116,33 @@ static esp_err_t sensor_handler(httpd_req_t *req) {
   return httpd_resp_sendstr(req, body);
 }
 
+extern const uint8_t control_page_start[] asm("_binary_control_page_html_gz_start");
+extern const uint8_t control_page_end[] asm("_binary_control_page_html_gz_end");
+
+static esp_err_t page_handler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(req, (const char *)control_page_start,
+                        control_page_end - control_page_start);
+}
+
+static esp_err_t control_get_handler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool enabled = !s_power_saving && !s_boot_loading;
+  xSemaphoreGive(s_mutex);
+  if (!enabled) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwr_required\"}");
+  }
+  char body[96];
+  snprintf(body, sizeof(body), "{\"status\":\"ok\",\"power_mode\":\"PWR\",\"control_mode\":\"%s\"}",
+           nmos_control_mode_name());
+  return httpd_resp_sendstr(req, body);
+}
+
 static esp_err_t control_handler(httpd_req_t *req) {
   char query[64], value[16], body[96];
   httpd_resp_set_type(req, "application/json");
@@ -140,6 +169,7 @@ static esp_err_t control_handler(httpd_req_t *req) {
     if (strcmp(value, "RA") == 0) mode = NMOS_RA;
     else if (strcmp(value, "ON") == 0) mode = NMOS_ON;
     else if (strcmp(value, "BL") == 0) mode = NMOS_BL;
+    else if (strcmp(value, "OFF") == 0) mode = NMOS_OFF;
     else goto invalid_mode;
     err = nmos_control_set_mode(mode);
   }
@@ -149,11 +179,65 @@ static esp_err_t control_handler(httpd_req_t *req) {
   }
   if (err != ESP_OK) goto invalid_mode;
   snprintf(body, sizeof(body), "{\"status\":\"ok\",\"power_mode\":\"PWR\",\"control_mode\":\"%s\"}",
-           mode == NMOS_RA ? "RA" : mode == NMOS_ON ? "ON" : "BL");
+           mode == NMOS_RA ? "RA" : mode == NMOS_ON ? "ON" : mode == NMOS_BL ? "BL" : "OFF");
   return httpd_resp_sendstr(req, body);
 invalid_mode:
   httpd_resp_set_status(req, "400 Bad Request");
   return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"invalid_control_mode\"}");
+}
+
+static esp_err_t pwm_response(httpd_req_t *req) {
+  struct pwm_settings settings;
+  pwm_settings_get(&settings);
+  char body[128];
+  snprintf(body, sizeof(body), "{\"status\":\"ok\",\"frequency_hz\":%u,"
+           "\"ctl1_duty_pct\":%u,\"ctl2_duty_pct\":%u}",
+           (unsigned)CFG_NMOS_PWM_FREQ_HZ, settings.ctl1, settings.ctl2);
+  return httpd_resp_sendstr(req, body);
+}
+
+static bool duty_parse(const char *text, unsigned *out) {
+  if (!text[0]) return false;
+  unsigned value = 0;
+  for (const char *p = text; *p; ++p) {
+    if (*p < '0' || *p > '9') return false;
+    value = value * 10 + (*p - '0');
+    if (value > 100) return false;
+  }
+  *out = value;
+  return true;
+}
+
+static esp_err_t pwm_handler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool pwr = !s_power_saving && !s_boot_loading;
+  xSemaphoreGive(s_mutex);
+  if (!pwr) goto pwr_required;
+  if (req->method == HTTP_GET) return pwm_response(req);
+  char query[96], value1[8], value2[8];
+  unsigned ctl1, ctl2;
+  size_t length = httpd_req_get_url_query_len(req);
+  if (!length || length >= sizeof(query) ||
+      httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+      httpd_query_key_value(query, "ctl1", value1, sizeof(value1)) != ESP_OK ||
+      httpd_query_key_value(query, "ctl2", value2, sizeof(value2)) != ESP_OK ||
+      !decode_url(value1) || !decode_url(value2) ||
+      !duty_parse(value1, &ctl1) || !duty_parse(value2, &ctl2)) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"invalid_pwm_duty\"}");
+  }
+  esp_err_t err = pwm_settings_save(ctl1, ctl2);
+  if (err == ESP_ERR_INVALID_STATE) goto pwr_required;
+  if (err != ESP_OK) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwm_save_failed\"}");
+  }
+  return pwm_response(req);
+pwr_required:
+  httpd_resp_set_status(req, "409 Conflict");
+  return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwr_required\"}");
 }
 
 static esp_err_t http_server_start(void) {
@@ -185,6 +269,23 @@ static esp_err_t http_server_start(void) {
         .handler = control_handler,
     };
     err = httpd_register_uri_handler(s_server, &control);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t query = {.uri = "/api/v1/control", .method = HTTP_GET,
+                              .handler = control_get_handler};
+    err = httpd_register_uri_handler(s_server, &query);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t page = {.uri = "/", .method = HTTP_GET, .handler = page_handler};
+    err = httpd_register_uri_handler(s_server, &page);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t pwm_get = {.uri = "/api/v1/pwm", .method = HTTP_GET, .handler = pwm_handler};
+    err = httpd_register_uri_handler(s_server, &pwm_get);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t pwm_post = {.uri = "/api/v1/pwm", .method = HTTP_POST, .handler = pwm_handler};
+    err = httpd_register_uri_handler(s_server, &pwm_post);
   }
   if (err != ESP_OK) {
     httpd_stop(s_server);
