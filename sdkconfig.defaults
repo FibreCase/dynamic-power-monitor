@@ -20,3 +20,7 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 #   tripping the task watchdog every 5 s. sample_task.c has a _Static_assert
 #   that fails the build if this ever drops below 200.
 CONFIG_FREERTOS_HZ=1000
+
+# UART0 is reserved for HLK-LD2410C-P; console uses native USB (GPIO18/19).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

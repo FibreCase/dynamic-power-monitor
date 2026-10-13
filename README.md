@@ -1,288 +1,282 @@
-# 12V Power Monitor (dynamic-power-monitor)
+# 5V Power and Environment Monitor
 
-## Current `5v` firmware
+[English](README.md) | [中文](README_zh.md)
 
-Power modes automatically follow INA226 bus voltage:
+Standalone ESP32-C3 firmware built with ESP-IDF. It monitors voltage, current, power, ambient temperature/humidity and air quality; controls two NMOS outputs using presence radar and a button; and displays readings on a 128×64 OLED. Environmental HTTP API and OTA updates run on the device without a host backend.
 
-| Mode | Voltage | Sampling | WiFi | OLED contrast |
-|---|---|---|---|---|
-| External | ≥4.5 V | 10 Hz | On, reconnects automatically | 255 |
-| Battery saving | <4.5 V | 1 Hz | Radio off | 128 |
+This README describes the current `5v` branch. The build project name remains `esp32-power-monitor`, producing `esp32-power-monitor.bin`.
 
-Power loss is detected within about 100 ms; restoration within about 1 second,
-plus sensor conversion/scheduling time. There is no hysteresis. Failed I2C reads
-retain the mode. Battery mode displays `BATTERY` and keeps checking voltage.
-Boot retains normal mode and the original WiFi/NTP waits. Automatic voltage
-monitoring starts 10 seconds after boot completes. WiFi restoration reconnects
-asynchronously. The LED is steady on when connected, off otherwise. Contrast 128 is half
-the normal register setting; perceived brightness may not be exactly halved.
-HTTP/OTA are unavailable on battery and return after power and WiFi reconnect.
-Configure the threshold and contrast via `CFG_EXTERNAL_POWER_MIN_V`,
-`CFG_OLED_CONTRAST_NORMAL` and `CFG_OLED_CONTRAST_BATTERY` in `config.h`.
+## Hardware
 
-IO6 controls NMOS CTL2; IO7 controls NMOS CTL1. Both outputs are HIGH
-from GPIO initialization and stay on in external and battery modes. Configure
-the pins with `CFG_NMOS_CTL2_PIN` and `CFG_NMOS_CTL1_PIN`.
+### GPIO
 
-The current board uses a 128×64 SSD1306 I²C OLED (0x3C, 0° rotation).
-Power appears above voltage/current, with WiFi and sampling status at the bottom.
+| Pin | Connection | Behavior |
+|---|---|---|
+| IO0 | HLK-LD2410C-P OUT | Internal pull-down; HIGH occupied, LOW empty |
+| IO3 | INA226 ALERT | Internal pull-up; active LOW, local overcurrent log |
+| IO4 / IO5 | I²C SDA / SCL | Shared sensor/display bus |
+| IO6 | NMOS CTL2 | HIGH on, LOW off |
+| IO7 | NMOS CTL1 | HIGH on, LOW off |
+| IO8 | Status LED | Active HIGH; off in ECO, on with WiFi in PWR |
+| IO9 | Button | Internal pull-up; connect button to GND, active LOW |
+| IO18 / IO19 | Native USB Serial/JTAG | D− / D+, flashing and logs |
+| UART0 | Reserved radar serial port | Not used by the system console; current radar logic uses OUT |
 
-The firmware now runs standalone: TCP host communication, remote sampling commands,
-and sample/OCP uploads have been removed. Sampling, OLED, WiFi/NTP and local OCP
-logs remain. The Python submodule is retained as legacy tooling; the dashboard
-and protocol descriptions below refer to the previous firmware.
+IO9 is also the BOOT strapping pin. Holding it during reset may enter download mode.
 
-Configure the device DHCP hostname in `main/config.h`:
+### I²C devices
 
-```c
-#define CFG_HOSTNAME "power-monitor"
-```
+| Device | 7-bit address | Purpose |
+|---|---|---|
+| INA226 | `0x4F` | Voltage/current/power and overcurrent alert |
+| SSD1306 | `0x3C` | 128×64 OLED, 0° rotation |
+| ENS160 | `0x53` | AQI, TVOC, eCO₂ and validity |
+| AHT21 | `0x38` | On the ENS160 board, supplies its compensation readings |
+| SHT40 | `0x44` | Ambient temperature/humidity for API and OLED |
 
-Use 1–32 letters, digits or hyphens, with a letter/digit at either end and no
-suffix such as `.lan`. Rebuild and reboot to apply. If the router resolves DHCP
-hostnames, use `http://power-monitor.lan/api/ota/update` (the suffix depends on
-the router); otherwise use the device IP. This does not enable mDNS or `.local`.
+SHT40 uses the datasheet conversion with **no fixed temperature offset or additional humidity correction**; RH is clamped to 0–100%. Both humidity sensors verify CRC. ENS160 eCO₂ is an equivalent estimate, not a direct CO₂ measurement.
 
-Configure `CFG_OTA_URL` in `main/config.h` with the fixed firmware `.bin` URL.
-The HTTP API listens on port 80. Trigger an asynchronous download with:
+## Startup and power modes
+
+Power modes are **PWR (standard)** and **ECO (power saving)**, independent of RA/ON/BL output control.
+
+Startup initializes local I²C/peripherals and always enters ECO mode. After OLED initialization, `Loading...` stays visible throughout startup and for **2 seconds after startup completes**. Live UI and automatic mode decisions then begin.
+
+WiFi connection and NTP sync run in the background. INA226 bus voltage must reach 4.5V to enable the radio. With external power but no WiFi IP, the device stays in ECO mode while attempting connection.
+
+| Condition | Mode | INA226 | Environment polling/compensation | WiFi | OLED |
+|---|---|---|---|---|---|
+| Startup and following 2 seconds | ECO | 1Hz | 0.1Hz | Radio off | Full brightness, Loading... |
+| Voltage <4.5V | ECO | 1Hz | 0.1Hz | Radio off | Full brightness, environment |
+| Voltage ≥4.5V, no WiFi IP | ECO | 1Hz | 0.1Hz | Background connection/retries | Full brightness, environment |
+| Voltage ≥4.5V, WiFi has IP | PWR | 10Hz | 1Hz | On | Full brightness, selectable UI |
+
+Modes can switch repeatedly. WiFi loss returns to ECO. Decisions run approximately every 100ms in PWR mode and every second in ECO, plus conversion/scheduling time. There is no voltage hysteresis. Failed INA226 reads retain the last successful voltage decision while still accounting for WiFi loss; before the first successful read the radio stays off.
+
+Environmental measurements and ENS160 host reads/compensation follow the mode. ENS160 itself remains in STANDARD continuous gas sensing to avoid repeated warm-up. The task shortens its wait when returning to PWR mode.
+
+NTP sync is not a condition for PWR mode. Before the first sync the environmental API Unix timestamp is `null`.
+
+## Button, outputs and display
+
+IO9 uses 50ms debounce and a 1-second long-press threshold.
+
+| Action | Result |
+|---|---|
+| Short press, on release | Cycle control mode (PWR RA/ON/BL, ECO RA/ON) |
+| Hold 1 second in PWR mode | Toggle power / environment UI once per hold |
+| Long hold during ECO or Loading | No UI change and no short-press action |
+
+Control modes are `RA`, `ON`, `BL`; PWR/ECO are separate power modes.
+Short presses cycle `RA → ON → BL → RA` in PWR mode, `RA ↔ ON` in ECO.
+BL is PWR-only. Every `PWR ↔ ECO` transition resets control mode to `RA`,
+including previous ON or BL selections. Unchanged power mode does not reset it.
+
+IO9 always-on overrides the power-mode restrictions:
+
+| Control | Power mode | CTL1 | CTL2 |
+|---|---|---|---|
+| RA | ECO (including startup) | On if occupied, off if empty | Always off |
+| RA | PWR | On if occupied, off if empty | On if occupied, off if empty |
+| ON | Any | Always on | Always on |
+| BL | PWR | On if occupied, off if empty | Always off |
+
+This policy applies at GPIO initialization and updates every 50ms as power or control mode changes. Releasing a long hold does not toggle NMOS control.
+
+Reboot defaults to radar control and power UI. Selections are not persisted. ECO always shows environment; returning to PWR restores the selected UI.
+
+- **Power UI:** large power above voltage/current, with power/control modes (e.g. `PWR | RA`) left and AQI right below.
+- **Environment UI:** large temperature upper left, smaller CO₂ digits with `ppm` upper right; humidity left/TVOC (ppb) right on the next row; power/control modes (e.g. `PWR | RA`) left and ENS160 AQI right at the bottom.
+- **Data quality:** `--` before data arrives, warm-up/startup indicators, and `STALE` on cached readings after read failures.
+
+Both modes and Loading use full OLED brightness (contrast 255). The LED is always off in ECO mode.
+
+## Configure, build and flash
+
+ESP-IDF v6.0.1, target `esp32c3`, with a partition table for 4MB flash. Initialize the display submodule; no Python backend is required:
 
 ```sh
-curl -X POST http://DEVICE_IP/api/ota/update
+git submodule update --init --recursive components/u8g2
+cp main/config.h.example main/config.h
 ```
 
-Override the download URL for this update only (without changing `CFG_OTA_URL`):
+Edit `main/config.h` for WiFi, hostname, OTA URL, GPIO and INA226 calibration. This local file is Git-ignored; commit only the template `main/config.h.example`.
+
+| Setting | Default / purpose |
+|---|---|
+| `CFG_WIFI_SSID` / `CFG_WIFI_PASS` | Replace credential placeholders |
+| `CFG_HOSTNAME` | `power-monitor`, DHCP hostname, no domain suffix, 1–32 characters |
+| `CFG_NTP_HOST` | `ntp.aliyun.com` |
+| `CFG_OTA_URL` | Full application `.bin` URL; configure for your deployment |
+| `CFG_MAX_CURRENT_A` / `CFG_SHUNT_OHM` | 10A / 0.005Ω; match the actual shunt |
+| `CFG_OCP_THRESHOLD_A` | 2.5A; logs alerts, does not automatically turn off NMOS |
+| `CFG_EXTERNAL_POWER_MIN_V` | 4.5V |
+| `CFG_OLED_CONTRAST_NORMAL` / `CFG_OLED_CONTRAST_BATTERY` | Both 255 |
+| `CFG_ENV_INTERVAL_NORMAL_MS` / `CFG_ENV_INTERVAL_SAVING_MS` | 1000 / 10000ms |
+| `CFG_BUTTON_DEBOUNCE_MS` / `CFG_BUTTON_LONG_PRESS_MS` | 50 / 1000ms |
+
+Maximum current × shunt resistance must remain below approximately 81.9mV for INA226. The template lists sensor addresses and GPIO settings.
+
+```sh
+# This machine's IDF installation; adapt for another host.
+source /home/fibre/.espressif/v6.0.1/esp-idf/export.sh
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+Use the actual enumerated port. Debugging uses **native USB Serial/JTAG**, not an external USB-UART bridge connected to UART0. Console defaults are in `sdkconfig.defaults`; local configuration is in `sdkconfig`. Existing local settings are not overwritten by defaults: verify USB Serial/JTAG as primary console and no secondary console.
+
+Flash the complete build including bootloader after changing console or partitions. Application-only OTA cannot update old bootloader settings. Early ROM output is controlled by GPIO/eFuse boot configuration, not the project's console settings.
+
+If the build reports a mismatched Python environment, use a fresh build directory:
+
+```sh
+idf.py -B build-5v build
+idf.py -B build-5v -p /dev/ttyACM0 flash monitor
+```
+
+Use `deactivate` to exit the Python venv; closing the terminal clears this session's IDF environment.
+
+## HTTP API
+
+The HTTP server listens on port **80** only in **PWR**. Entering **ECO** stops
+the server and closes connections; returning to PWR starts it again. HTTP is
+also disabled during startup and the following 2-second grace period. Examples use `power-monitor.lan`; the suffix depends on router DHCP hostname resolution. Use the device IP if necessary. The project does not provide mDNS `.local` resolution.
+
+### GET /api/v1/sensor
+
+Returns a cached snapshot without waiting for a sensor measurement.
+
+```sh
+curl http://power-monitor.lan/api/v1/sensor
+```
+
+Example successful response:
+
+```json
+{
+  "status": "ok",
+  "last_updated_unix_ms": 1791480000000,
+  "reading": {
+    "temperature_c": 25.4,
+    "humidity_rh_pct": 43.2,
+    "compensation_temperature_c": 27.1,
+    "compensation_humidity_rh_pct": 40.5,
+    "aqi": 1,
+    "tvoc_ppb": 12,
+    "eco2_ppm": 400,
+    "validity": "normal",
+    "new_data": true
+  },
+  "error": null
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `temperature_c` / `humidity_rh_pct` | SHT40 ambient °C / %RH |
+| `compensation_temperature_c` / `compensation_humidity_rh_pct` | AHT21 readings supplied to ENS160 |
+| `aqi` | ENS160 AQI level, normally 1–5 |
+| `tvoc_ppb` / `eco2_ppm` | ENS160 TVOC / equivalent CO₂ |
+| `validity` | `normal`, `warmup`, `startup` or `invalid` |
+| `new_data` | New ENS160 gas data at the latest poll; not cleared by HTTP queries |
+| `last_updated_unix_ms` | Latest completed combined poll; null before NTP sync |
+
+Without new gas data, the snapshot retains previous gas values while updating temperature/humidity. Warm-up/startup return HTTP 200; inspect validity before using those readings.
+
+Not-ready, read/CRC/device errors and invalid output return HTTP 503 with `status: "error"` and an error identifier. Read failures preserve the last successful snapshot/time and set `new_data: false`; before the first snapshot `reading: null`. The task retries automatically. Error identifiers include `not_ready`, `sht40_crc_error`, `sht40_read_failed`, `aht21_init_failed`, `aht21_crc_error`, `aht21_read_failed`, `ens160_init_failed`, `ens160_compensation_failed`, `ens160_read_failed`, `ens160_device_error`, `ens160_invalid_output`.
+
+### POST /api/v1/control
+
+Omit `mode` to cycle `RA ↔ BL`; from ON, the next mode is RA.
+Explicit `?mode=ON` remains supported; IO9 cycling is unchanged.
+
+```sh
+curl -X POST http://power-monitor.lan/api/v1/control
+```
+
+
+Set control mode in PWR only. Optional, case-sensitive `mode` is `RA`, `ON` or
+`BL`. No body is needed. Outputs apply on the next status update (about 50ms),
+and the UI reflects the shared mode.
+
+```sh
+curl -X POST 'http://power-monitor.lan/api/v1/control?mode=RA'
+curl -X POST 'http://power-monitor.lan/api/v1/control?mode=ON'
+curl -X POST 'http://power-monitor.lan/api/v1/control?mode=BL'
+```
+
+Successful HTTP 200 response:
+
+```json
+{"status":"ok","power_mode":"PWR","control_mode":"BL"}
+```
+
+Invalid/empty mode returns HTTP 400 with `error: "invalid_control_mode"`.
+If the device enters ECO/Loading while processing, HTTP 409 returns
+`error: "pwr_required"`; HTTP itself is stopped in ECO. API and IO9 share the
+same state; the latest setting wins and is not persisted. Every power-mode transition resets control mode to RA.
+
+### POST /api/ota/update
+
+Without parameters, download from `CFG_OTA_URL`:
+
+```sh
+curl -X POST http://power-monitor.lan/api/ota/update
+```
+
+Override the URL for this update only:
 
 ```sh
 curl -X POST -G \
   --data-urlencode 'url=http://192.168.1.100:8000/firmware.bin' \
-  'http://espressif.lan/api/ota/update'
+  'http://power-monitor.lan/api/ota/update'
 ```
 
-`-X POST` selects POST, `-G` places parameters in the query string, and
-`--data-urlencode` escapes special characters such as `?` and `&` in the firmware
-URL. Lowercase `-x` specifies a proxy. Opening the endpoint in a browser sends
-GET and returns 405.
+HTTP/HTTPS URLs are supported, with at most 255 decoded bytes. URL-encode the parameter. Uppercase `-X` selects the method; lowercase `-x` configures a proxy. Opening this update endpoint in a browser sends GET and returns 405.
 
-The optional `url` supports HTTP/HTTPS and at most 255 decoded bytes. Omitting
-it uses `CFG_OTA_URL`. Empty URLs, malformed encoding, unsupported schemes and
-oversized parameters return 400.
-
-| HTTP status | JSON response | Meaning |
+| HTTP status | Response | Meaning |
 |---|---|---|
-| 202 | `{"status":"update_started"}` | Update task started |
-| 400 | `{"error":"invalid_ota_url"}` | Invalid URL parameter |
-| 409 | `{"error":"update_in_progress"}` | An update is already running |
-| 503 | `{"error":"update_start_failed"}` | Update task could not start |
+| 202 | `{"status":"update_started"}` | Asynchronous update task started |
+| 400 | `{"error":"invalid_ota_url"}` | Invalid, empty or oversized URL |
+| 409 | `{"error":"update_in_progress"}` | Another update is running |
+| 503 | `{"error":"update_start_failed"}` | Cannot start the update task |
 
-202 acknowledges startup only. Download results are logged locally.
-Successful validation switches OTA slots and reboots; failures retain the current
-firmware. After downloading, writing and validating the inactive slot, OTA
-compares app-image SHA-256 hashes rather than version strings. Changed images
-with identical versions (including dirty builds) can update; identical images
-skip the boot-slot switch and reboot. Duplicate images are still downloaded
-and written. Hash failures retain the current firmware; results are logged locally.
+202 acknowledges startup, not completion; inspect USB logs for the result. Serve the built application `.bin`, not a merged flash image, as a direct HTTP 200 response.
 
-[English](README.md) | [中文](README_zh.md)
+After writing and validating the inactive slot, OTA compares complete application-image **SHA-256** hashes. Changed images with identical version strings/dirty builds can update; identical images skip the slot switch/reboot, although download and writes still happen. Download, validation or hash failures retain the current firmware. Successful updates switch slots and reboot.
 
-A real-time **12 V supply / power distribution monitor** built around an
-ESP32-C3. The firmware reads an **INA226** current & power sensor, shows the
-readings on a **128×32 SSD1306 OLED**, and streams samples over a long-lived
-TCP link to a Python backend that persists them and serves them to a browser
-dashboard. It supports **over-the-air firmware updates** (dual-slot with
-rollback) and **overcurrent (OCP) alerting** with a web anomaly log.
+`partitions.csv` defines two 1700KiB OTA slots with application rollback enabled. A new application confirms after local initialization; WiFi/NTP availability is not required. Boot failures before confirmation can roll back.
 
-> **Hardware:** [OSHWHub — 12V Power Monitor](https://oshwhub.com/fibrecase/project_mfgowtnz) — design files in 嘉立创 EDA (JLCEDA).
+## Source layout
 
-| Hardware | Firmware | Dashboard |
-|---|---|---|
-| ![ESP32-C3 12V monitor — assembled PCB](assets/hardware.png) | ESP-IDF v6.0.1 | ![12V power monitor dashboard — live view](assets/web.png) |
+| File | Responsibility |
+|---|---|
+| `main/app_main.c` | Local initialization, task startup and OTA confirmation |
+| `main/core.{h,c}` | Shared readings, modes, interval and synchronization |
+| `main/ina226.{h,c}` / `main/sample_task.{h,c}` | Power measurements, alerts and mode policy |
+| `main/environment_sensor.{h,c}` | SHT40/AHT21/ENS160, compensation and cache |
+| `main/status.{h,c}` | Radar, button, NMOS, LED and alert logs |
+| `main/display.c` / `main/u8g2_esp_hal.c` | OLED UI and I²C transport |
+| `main/wifi_ntp.{h,c}` | Background WiFi and NTP |
+| `main/http_api.c` / `main/ota_update.c` | HTTP endpoints and OTA |
+| `main/config.h.example` | Hardware/network template |
+| `sdkconfig.defaults` / `partitions.csv` | USB console, system configuration and OTA slots |
 
-![JLCEDA PCB render](assets/hardware_pcb.png)
+`components/u8g2` is the display library submodule. The retained `python/` submodule is legacy host tooling and is not required to build or run this project.
 
-## Features
+## License
 
-- **Live power telemetry** — bus voltage (V), current (A), and power (W) at up to **10 Hz** while watched, dropping to **0.1 Hz** idle to save power/traffic.
-- **Chip temperature** — the ESP32-C3's internal (die) temperature rides along with every sample and is charted separately on the dashboard.
-- **On-board display** — 128×32 SSD1306 OLED (u8g2) shows power / voltage / link status on the device itself.
-- **Browser dashboard** — four tabs: **Live** (live chart), **History** (query by time range), **Alerts** (anomaly/OCP log), **Firmware** (OTA).
-- **Bilingual UI** — English by default (中文 when the browser is Chinese), switchable from the header; the choice is remembered.
-- **SQLite history** — every sample is persisted; query by time range.
-- **OTA updates** — flash new firmware over the air into the second slot, with automatic rollback if the new image fails to boot.
-- **Overcurrent alerting** — two independent detectors (the INA226 **ALERT** pin *and* a backend threshold) log the event time + voltage/current/power; browse them in **Alerts**.
-- **Adaptive sampling** — the device bumps to 10 Hz only when a dashboard viewer is connected, and back to 0.1 Hz when the last viewer leaves.
+[MIT](LICENSE)
 
-## Architecture
+Both footers show only power/control modes and AQI in the 12px font.
+Sensor warm-up/startup/normal states remain available through the API.
 
-Three independent components:
+Both lower rows in the power/environment UI use the same fixed ProFont 12 font, without automatic shrinking.
 
-1. **Firmware** (repo root, `main/`) — ESP32-C3, ESP-IDF (C), target `esp32c3`. Reads the INA226 over I²C and the chip's internal temperature sensor, drives the OLED, and owns the TCP connection.
-2. **Backend** (`python/`, a git **submodule**) — Python (`uv`), FastAPI + async TCP ingest + SQLite persistence + WebSocket/HTTP APIs.
-3. **Dashboard** (`python/web/`) — React + Vite + ECharts single-page app, built to static assets and served by the backend itself (same-origin, no CORS).
+During ENS160 `startup` or `warmup`, the environment UI strikes through the
+CO₂ digits only. The `ppm` label stays unchanged; normal operation removes the line.
 
-```
-┌─────────────┐  TCP 24-byte samples / 25-byte OCP events   ┌──────────────────────┐
-│  ESP32-C3   │ ──────────────────────────────────────────▶│   Python backend     │
-│  + INA226   │ ◀───────────────────────────────────────── │  (FastAPI, SQLite)   │
-└─────────────┘   8-byte control frames (interval / OTA)    └──────────┬───────────┘
-        │   OLED (local display)                                        │
-        │                                                               │ WS (live) + HTTP (history/OTA/OCP)
-        └──────────────────────────────────────────────▶  browser dashboard (React/Vite/ECharts)
-```
-
-See [`CLAUDE.md`](CLAUDE.md) for the full wire protocol, task breakdown, and invariants.
-
-## Repository layout
-
-```
-.
-├── main/                  # ESP32-C3 firmware (ESP-IDF component)
-│   ├── app_main.c         #   composition root: NVS → I2C → OLED → INA226 → WiFi → NTP → start tasks
-│   ├── core.{h,c}         #   shared inter-task state (reading, interval, event queue, mutex)
-│   ├── net_task.{h,c}     #   TCP: connect state machine, control-frame parse, sample/event send
-│   ├── sample_task.{h,c}  #   INA226 read on its own period + publish
-│   ├── display.{h,c}      #   OLED (u8g2): splash + live frame
-│   ├── status.{h,c}       #   status LED + INA226 ALERT pin (OCP edge → event)
-│   ├── wifi_ntp.{h,c}     #   WiFi STA + NTP bring-up
-│   ├── ota_update.{h,c}   #   OTA client (downstream cmd=0x02 → download + reboot)
-│   ├── ina226.{h,c}       #   INA226 driver (calibration, OCP threshold, 64/512 averaging)
-│   ├── u8g2_esp_hal.{h,c} #   u8g2 <-> ESP-IDF I2C glue for the SSD1306 OLED
-│   └── config.h           #   git-ignored; copy of config.h.example (holds WiFi creds)
-├── components/u8g2/       # git submodule: u8g2 graphics library (pinned 2.37.1)
-├── assets/                # README images (hardware photo, PCB render, web screenshot)
-├── partitions.csv         # custom two-OTA-slot partition table (see OTA)
-├── sdkconfig.defaults     # selects partitions.csv + enables app rollback
-├── CMakeLists.txt         # top-level ESP-IDF project
-└── python/                # git submodule: Python backend (+ web/ dashboard)
-```
-
-## Hardware
-
-The hardware is open-sourced on [OSHWHub](https://oshwhub.com/fibrecase/project_mfgowtnz)
-(design files in JLCEDA / 嘉立创 EDA). The board is a small **12 V
-power-distribution + monitor** node: a DC input feeds 4× 12 V terminal
-blocks, and the INA226 measures the total current drawn by the connected loads.
-
-Main parts:
-
-- **ESP32-C3-02E** — MCU + WiFi (built-in USB-Serial-JTAG for console/flash).
-- **INA226** — bidirectional current/power sensor on a low shunt; I²C address `0x40`.
-- **128×32 SSD1306 OLED** — I²C (address `0x3C`), on the shared I²C bus.
-- **DC input** (XT60-style) + **4× 2-pin terminal blocks** for 12 V loads.
-- **Status LED**, **BOOT** / **RESET** buttons, **USB** port.
-
-Firmware ↔ hardware mapping (all in `main/config.h`):
-
-| Signal | GPIO | Notes |
-|---|---|---|
-| I²C SDA / SCL | GPIO4 / GPIO5 | shared bus: INA226 + OLED, internal pull-ups |
-| Status LED | GPIO8 | push-pull, active-high (blink rate = WiFi / sampling mode) |
-| INA226 ALERT | GPIO3 | open-drain, active-low (OCP comparator) |
-| USB-Serial-JTAG | GPIO18 / GPIO19 | built-in — do not repurpose |
-
-## Firmware
-
-Requires ESP-IDF (this repo builds with **v6.0.1**). Export it, then:
-
-```bash
-source $IDF_PATH/export.sh
-idf.py set-target esp32c3     # once
-idf.py build
-idf.py -p PORT flash monitor
-```
-
-Before flashing, copy the config template and edit it for your board/network:
-
-```bash
-cp main/config.h.example main/config.h   # then edit main/config.h (git-ignored)
-```
-
-Set the `CFG_*` macros in `main/config.h`: WiFi SSID/password, host IP/port, NTP
-server, I2C pins, the INA226 `CFG_MAX_CURRENT_A` / `CFG_SHUNT_OHM` (the shunt
-resistance sets every current & power reading), and `CFG_OCP_THRESHOLD_A`
-(the overcurrent alert threshold, default **2.5 A**).
-
-## OTA (firmware update)
-
-The firmware updates itself over the air into the second flash slot and reboots
-into it, using ESP-IDF's built-in **dual-slot OTA with app rollback**: if the new
-image boots and confirms, it sticks; if it fails, the bootloader automatically
-reverts to the previous image — a bad update can't brick a deployed device.
-
-The custom partition table (`partitions.csv`, no `factory`): `nvs` 0x9000,
-`otadata` 0xf000, `phy_init` 0x11000, then `ota_0` 0x20000 and `ota_1` 0x1d0000
-(1700 K each). A fresh app lands in `ota_0`; `app_main` marks it valid after a
-healthy boot. Keep the `.bin` well under one slot (~1.65 MB; the current build is
-~980 KB).
-
-**To publish an update** (dashboard-driven):
-1. `idf.py build` → `build/esp32-power-monitor.bin`.
-2. Dashboard → **Firmware** → choose the `.bin` (“Choose .bin firmware”) — it uploads to the backend (`POST /ota/upload`) and is served at `/ota/firmware.bin`.
-3. Click **Push to device**. The backend sends the OTA command over TCP; the device downloads and reboots. The button is enabled only when a firmware is uploaded *and* the device is online.
-
-## Overcurrent (OCP) alerting
-
-Two independent detectors record overcurrent events to the backend, and both are
-viewable in the dashboard's **Alerts** tab:
-
-- **Device (hardware)** — the INA226's **ALERT** comparator asserts when the
-  current exceeds `CFG_OCP_THRESHOLD_A` (default 2.5 A). On the rising edge the
-  firmware takes a fresh INA226 read and pushes a 25-byte OCP event over TCP.
-- **Backend (threshold)** — the backend independently flags a sample whose current
-  exceeds `PM_OCP_THRESHOLD_MA` (default 2500 mA) on the rising edge.
-
-Each event stores its **timestamp** plus the **voltage / current / power** at that
-moment; the two paths are distinguished by a `source` field (`device` / `host`).
-
-## Backend
-
-```bash
-cd python
-uv sync
-uv run power-monitor
-```
-
-- **TCP ingest** on port `38888` (the ESP32 connects here; point the firmware's
-  `CFG_HOST_IP`/`CFG_HOST_PORT` at this host).
-- **`ws://<host>:38000/ws`** — live sample broadcast. The first viewer switches the
-  device to 10 Hz; the last viewer leaving drops it to 0.1 Hz.
-- **`GET /api/v1/history?start_ts=&end_ts=&limit=`** — persisted samples, time-descending.
-- **`GET /api/v1/alerts?start_ts=&end_ts=&limit=`** — OCP events, time-descending.
-- **`GET /healthz`** — `{"status", "device": <bool>, "viewers": <int>}`.
-- **`GET /`** — the dashboard, once built.
-
-Configuration is via `PM_*` environment variables — see [`python/README.md`](python/README.md).
-
-## Dashboard
-
-A React + Vite + ECharts single-page app (`python/web/`) with four tabs —
-**Live** (live chart), **History** (query by time range), **Alerts** (OCP log), and
-**Firmware** (OTA). It's served by the backend itself, same-origin, so no
-separate process or CORS is needed in production.
-
-```bash
-cd python/web
-npm install
-npm run build        # outputs python/web/dist/, served by FastAPI at "/"
-```
-
-During development, run it against a running backend with hot reload:
-
-```bash
-cd python/web
-npm run dev          # http://localhost:5173, proxies /api, /ws, /healthz, /ota -> :38000
-```
-
-## End-to-end test
-
-The backend ships a hardware-free end-to-end test (fake ESP32 over TCP + a
-WebSocket viewer) that exercises reassembly, the live broadcast, the interval
-control, history, OTA, and both OCP detection paths:
-
-```bash
-cd python
-uv run python -m tests.e2e
-```
-
----
-
-*ESP32-C3 / INA226 / SSD1306 — [dynamic-power-monitor](https://github.com/FibreCase/dynamic-power-monitor).*
+A separate background task controls HTTP start/stop without blocking power
+sampling or mode decisions. ECO may attempt WiFi connection when externally
+powered, but does not serve sensor/OTA HTTP endpoints.

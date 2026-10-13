@@ -9,6 +9,7 @@
 #include "temp_sensor.h"
 #include "config.h"
 #include "wifi_ntp.h"
+#include "status.h"
 #include "esp_log.h"
 
 #define STACK_SAMPLE 4096
@@ -29,10 +30,34 @@ _Static_assert(configTICK_RATE_HZ >= 200,
 
 static uint32_t s_monitor_start;
 static bool s_monitor_active;
+static float s_last_voltage;
 
 void power_mode_monitor_start(void) {
   s_monitor_start = now_ms();
   s_monitor_active = false;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  s_boot_loading = true;
+  xSemaphoreGive(s_mutex);
+}
+
+static void power_mode_update(float voltage) {
+  s_last_voltage = voltage;
+  bool external = voltage >= CFG_EXTERNAL_POWER_MIN_V;
+  wifi_set_enabled(external);
+  // Low voltage turns the radio off; external power permits connection attempts
+  // while sampling/display stay in saving mode until GOT_IP.
+  bool saving = !external || !wifi_is_ready();
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool changed = saving != s_power_saving;
+  xSemaphoreGive(s_mutex);
+  if (changed) {
+    set_sampling_interval(saving ? SLOW_INTERVAL_MS : NORMAL_INTERVAL_MS);
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_power_saving = saving;
+    nmos_control_reset();
+    xSemaphoreGive(s_mutex);
+    ESP_LOGI("power-mode", "%s (%.3f V)", saving ? "ECO" : "PWR", voltage);
+  }
 }
 
 static void sample_task(void *arg) {
@@ -51,31 +76,20 @@ static void sample_task(void *arg) {
     if (!due)
       continue;
 
+    if (!s_monitor_active && now - s_monitor_start >= 2000u) {
+      s_monitor_active = true;
+      xSemaphoreTake(s_mutex, portMAX_DELAY);
+      s_boot_loading = false;
+      xSemaphoreGive(s_mutex);
+    }
     float voltage;
     if (ina226_read_voltage(&voltage) != ESP_OK) {
       ESP_LOGW("power-mode", "voltage read failed; retaining power mode");
+      if (s_monitor_active)
+        power_mode_update(s_last_voltage);
       continue;
     }
-    if (!s_monitor_active && now - s_monitor_start >= 10000u)
-      s_monitor_active = true;
-    if (s_monitor_active) {
-      bool battery = voltage < CFG_EXTERNAL_POWER_MIN_V;
-      xSemaphoreTake(s_mutex, portMAX_DELAY);
-      bool changed = battery != s_battery_mode;
-      xSemaphoreGive(s_mutex);
-      if (changed) {
-        set_sampling_interval(battery ? SLOW_INTERVAL_MS : NORMAL_INTERVAL_MS);
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
-        s_battery_mode = battery;
-        xSemaphoreGive(s_mutex);
-        ESP_LOGI("power-mode", "%s power (%.3f V)", battery ? "battery" : "external", voltage);
-      }
-      // Retry radio state changes if a previous driver call failed.
-      esp_err_t err = wifi_set_enabled(!battery);
-      if (err != ESP_OK)
-        ESP_LOGW("power-mode", "WiFi power change failed: %s", esp_err_to_name(err));
-
-    }
+    if (s_monitor_active) power_mode_update(voltage);
 
     struct reading r = {
         .v = voltage,

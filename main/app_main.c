@@ -4,6 +4,7 @@
 #include "display.h"
 #include "ina226.h"
 #include "http_api.h"
+#include "environment_sensor.h"
 #include "sample_task.h"
 #include "status.h"
 #include "temp_sensor.h"
@@ -56,16 +57,9 @@ static esp_err_t init_i2c(void) {
 void app_main(void) {
   esp_err_t e;
 
-  // Flash / NVS (required by the WiFi stack).
-  e = nvs_flash_init();
-  if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    ESP_ERROR_CHECK(nvs_flash_init());
-  }
-
   // Synchronisation primitives, created before any task is started.
   ESP_ERROR_CHECK(core_init());
-  status_init_gpio(); // NMOS gates on + LED output + ALERT input
+  status_init_gpio(); // Radar + NMOS gates + LED output + ALERT input
 
   e = init_i2c();
   if (e != ESP_OK) {
@@ -81,7 +75,6 @@ void app_main(void) {
   if (e != ESP_OK) {
     ESP_LOGE(TAG, "INA226 init failed: %s (check shunt/max current)",
              esp_err_to_name(e));
-    display_splash("INA226 FAIL");
   } else {
     // Arm the shunt overcurrent comparator using Alert Limit and Mask/Enable.
     // ALERT asserts low when the threshold is exceeded.
@@ -90,25 +83,23 @@ void app_main(void) {
       ESP_LOGW(TAG, "INA226 OCP threshold not set: %s", esp_err_to_name(oe));
   }
 
+  // Boot always uses saving mode; voltage policy is armed after startup.
+  s_power_saving = true;
+  set_sampling_interval(SLOW_INTERVAL_MS);
+
+  // Flash / NVS (required by the WiFi stack).
+  e = nvs_flash_init();
+  if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    ESP_ERROR_CHECK(nvs_flash_init());
+  }
+
+  ESP_ERROR_CHECK(wifi_background_start());
+
   // Internal die-temperature sensor. Best effort: if it fails to come up the
   // samples simply carry NAN and the dashboard shows no temperature.
   if (temp_sensor_init() != ESP_OK)
     ESP_LOGW(TAG, "internal temp sensor unavailable");
-
-  // WiFi: block for the connect window (GOT_IP or 20 s); on failure the module
-  // runs the 2.4 GHz scan diagnostic and shows "WiFi FAIL".
-  display_splash("WiFi...");
-  if (wifi_boot() != ESP_OK)
-    display_splash("WiFi FAIL");
-
-  // NTP: block for the sync window (sync or 30 s). Per spec, sampling waits
-  // for the clock to be synced before it starts.
-  display_splash("NTP...");
-  ntp_boot();
-  vTaskDelay(pdMS_TO_TICKS(500));
-
-  // Start in normal (10 Hz) mode.
-  set_sampling_interval(DEFAULT_INTERVAL_MS);
 
   ESP_LOGI(TAG, "ready: max=%.0fA shunt=%.3fOhm interval=%ums",
            CFG_MAX_CURRENT_A, CFG_SHUNT_OHM, (unsigned)s_interval_ms);
@@ -120,8 +111,7 @@ void app_main(void) {
   // - A directly-flashed app is NEW; this flips it to VALID too, so the
   //   passive slot is well-defined.
   // - An already-VALID app: no-op.
-  // Only reached after WiFi + NTP + peripherals are up, i.e. the app has
-  // clearly booted. If a bad update crashes before this line, the bootloader
+  // Local peripherals are initialized; WiFi/NTP are not boot requirements. If a bad update crashes before this line, the bootloader
   // (with app rollback enabled) reverts to the previous app automatically.
   esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
   if (err == ESP_OK)
@@ -131,7 +121,8 @@ void app_main(void) {
 
   // Start the tasks. Priority order: display > sample > status.
   status_task_create();
-  ESP_ERROR_CHECK(http_api_start());
+  ESP_ERROR_CHECK(environment_sensor_start(s_bus));
+  ESP_ERROR_CHECK(http_api_control_start());
   power_mode_monitor_start();
   sample_task_create();
   display_task_create();

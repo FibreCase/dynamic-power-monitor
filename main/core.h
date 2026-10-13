@@ -21,7 +21,8 @@ struct reading {
 /* --- Shared state (defined in core.c) --- */
 extern struct reading s_reading;
 extern uint32_t s_interval_ms;
-extern bool s_battery_mode; /* guarded by s_mutex */
+extern bool s_boot_loading; /* startup plus 2-second grace period; guarded by s_mutex */
+extern bool s_power_saving; /* guarded by s_mutex */
 extern bool s_wifi_up;
 extern bool s_wifi_disconnected;
 extern SemaphoreHandle_t s_mutex;  /* guards s_reading + s_interval_ms */

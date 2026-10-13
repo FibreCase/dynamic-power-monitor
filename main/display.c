@@ -14,6 +14,8 @@
 
 #include "config.h"
 #include "core.h"
+#include "status.h"
+#include "environment_sensor.h"
 #include "freertos/task.h"
 #include "u8g2_esp_hal.h"
 
@@ -21,6 +23,8 @@ static u8g2_t s_u8g2;
 
 void display_init(i2c_master_dev_handle_t oled) {
   u8g2_esp_hal_init(&s_u8g2, oled);
+  u8g2_SetContrast(&s_u8g2, CFG_OLED_CONTRAST_BATTERY);
+  display_splash("Loading...");
 }
 
 /* Center the boot message on the panel. */
@@ -33,21 +37,91 @@ void display_splash(const char *msg) {
   u8g2_SendBuffer(&s_u8g2);
 }
 
+/* Both screens share a readable power/control and AQI footer. */
+static void oled_footer_render(const struct environment_reading *r) {
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool saving = s_power_saving;
+  xSemaphoreGive(s_mutex);
+  char left[24], right[16];
+  snprintf(left, sizeof(left), "%s | %s", saving ? "ECO" : "PWR",
+           nmos_control_mode_name());
+  if (r->available)
+    snprintf(right, sizeof(right), "AQI %u", (unsigned)r->aqi);
+  else
+    snprintf(right, sizeof(right), "AQI --");
+  int width = u8g2_GetDisplayWidth(&s_u8g2);
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
+  u8g2_DrawStr(&s_u8g2, 0, 62, left);
+  u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, right), 62, right);
+}
+
+/* Environmental readings with the shared mode/AQI footer. */
+static void oled_environment_render(void) {
+  struct environment_reading r;
+  environment_sensor_get(&r);
+  char temperature[24], humidity[24], co2[24], tvoc[24];
+  if (r.available) {
+    snprintf(temperature, sizeof(temperature), "%.1fC", r.temperature_c);
+    snprintf(humidity, sizeof(humidity), "%.1f%%", r.humidity_rh_pct);
+    snprintf(co2, sizeof(co2), "%u", (unsigned)r.eco2_ppm);
+    snprintf(tvoc, sizeof(tvoc), "TVOC %u", (unsigned)r.tvoc_ppb);
+  } else {
+    snprintf(temperature, sizeof(temperature), "--C");
+    snprintf(humidity, sizeof(humidity), "--%%");
+    snprintf(co2, sizeof(co2), "--");
+    snprintf(tvoc, sizeof(tvoc), "TVOC --");
+  }
+  const int width = u8g2_GetDisplayWidth(&s_u8g2);
+  u8g2_ClearBuffer(&s_u8g2);
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont17_tf);
+  int co2_width = u8g2_GetStrWidth(&s_u8g2, co2);
+  u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+  const char *co2_label = "ppm";
+  int label_width = u8g2_GetStrWidth(&s_u8g2, co2_label);
+  int right_width = co2_width > label_width ? co2_width : label_width;
+  u8g2_DrawStr(&s_u8g2, width - label_width, 10, co2_label);
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont17_tf);
+  u8g2_DrawStr(&s_u8g2, width - co2_width, 28, co2);
+  // Strike through gas values until ENS160 completes warm-up/startup.
+  if (r.available && (r.validity == 1 || r.validity == 2)) {
+    int line_y = 28 - u8g2_GetAscent(&s_u8g2) / 2;
+    u8g2_DrawHLine(&s_u8g2, width - co2_width, line_y, co2_width);
+  }
+
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont29_tf);
+  if (u8g2_GetStrWidth(&s_u8g2, temperature) > width - right_width - 6)
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tf);
+  if (u8g2_GetStrWidth(&s_u8g2, temperature) > width - right_width - 6)
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
+  u8g2_DrawStr(&s_u8g2, 0, 30, temperature);
+  u8g2_DrawHLine(&s_u8g2, 0, 35, width);
+
+  u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
+  u8g2_DrawStr(&s_u8g2, 0, 48, humidity);
+  u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, tvoc), 48, tvoc);
+  oled_footer_render(&r);
+  u8g2_SendBuffer(&s_u8g2);
+}
+
 /* 128x64: large power, voltage/current row, then WiFi and sampling mode. */
 static void oled_live_render(void) {
   struct reading r;
-  bool normal, battery;
+  bool saving;
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   r = s_reading;
-  battery = s_battery_mode;
-  normal = (s_interval_ms <= NORMAL_INTERVAL_MS);
+  saving = s_power_saving;
   xSemaphoreGive(s_mutex);
 
   static int contrast = -1;
-  int desired = battery ? CFG_OLED_CONTRAST_BATTERY : CFG_OLED_CONTRAST_NORMAL;
+  int desired = saving ? CFG_OLED_CONTRAST_BATTERY : CFG_OLED_CONTRAST_NORMAL;
   if (contrast != desired) {
     u8g2_SetContrast(&s_u8g2, desired);
     contrast = desired;
+  }
+
+  if (saving || environment_ui_selected()) {
+    oled_environment_render();
+    return;
   }
 
   char vbuf[20], ibuf[20], pbuf[20];
@@ -70,18 +144,12 @@ static void oled_live_render(void) {
   snprintf(vbuf, sizeof(vbuf), "%.2fV", r.v);
   snprintf(ibuf, sizeof(ibuf), "%.3fA", r.i / 1000.0f);
   u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tf);
-  // Use a smaller font if unusually long readings would overlap.
-  if (u8g2_GetStrWidth(&s_u8g2, vbuf) +
-      u8g2_GetStrWidth(&s_u8g2, ibuf) + 6 > width)
-    u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
   u8g2_DrawStr(&s_u8g2, 0, 48, vbuf);
   u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, ibuf), 48, ibuf);
 
-  const char *wifi = battery ? "BATTERY" : (!s_wifi_up || s_wifi_disconnected) ? "WiFi DISC" : "WiFi OK";
-  const char *mode = normal ? "10Hz" : "1Hz";
-  u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
-  u8g2_DrawStr(&s_u8g2, 0, 62, wifi);
-  u8g2_DrawStr(&s_u8g2, width - u8g2_GetStrWidth(&s_u8g2, mode), 62, mode);
+  struct environment_reading environment;
+  environment_sensor_get(&environment);
+  oled_footer_render(&environment);
 
   u8g2_SendBuffer(&s_u8g2);
 }
@@ -91,7 +159,13 @@ static void oled_live_render(void) {
 static void display_task(void *arg) {
   (void)arg;
   for (;;) {
-    oled_live_render();
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool loading = s_boot_loading;
+    xSemaphoreGive(s_mutex);
+    if (loading)
+      display_splash("Loading...");
+    else
+      oled_live_render();
     vTaskDelay(pdMS_TO_TICKS(OLED_REFRESH_MS));
   }
 }
