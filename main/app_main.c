@@ -9,6 +9,7 @@
 #include "status.h"
 #include "pwm_settings.h"
 #include "radar_at.h"
+#include "ble_control.h"
 #include "temp_sensor.h"
 #include "u8g2_esp_hal.h"
 #include "wifi_ntp.h"
@@ -112,6 +113,7 @@ void app_main(void) {
   // Start control/sampling before low-priority display and bulk OTA work.
   status_task_create();
   ESP_ERROR_CHECK(environment_sensor_start(s_bus));
+  ESP_ERROR_CHECK(ble_control_start());
   ESP_ERROR_CHECK(http_api_control_start());
   power_mode_monitor_start();
   sample_task_create();

@@ -1,8 +1,9 @@
 idf_component_register(SRCS "temp_sensor.c" "app_main.c" "core.c" "http_api.c" "sample_task.c"
                        "display.c" "status.c" "wifi_ntp.c" "ota_update.c"
-                       "ina226.c" "u8g2_esp_hal.c" "environment_sensor.c" "pwm_settings.c" "radar_at.c"
+                       "ina226.c" "u8g2_esp_hal.c" "environment_sensor.c" "pwm_settings.c" "radar_at.c" "ble_control.c"
                        INCLUDE_DIRS "."
                        PRIV_REQUIRES
+                           bt
                            nvs_flash
                            esp_wifi
                            esp_netif

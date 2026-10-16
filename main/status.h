@@ -21,10 +21,13 @@ enum nmos_mode nmos_control_mode(void);
 /* Called under the core mutex when power mode changes. */
 void nmos_control_reset(void);
 const char *nmos_control_mode_name(void);
-/* Set a mode in PWR; ECO/loading returns ESP_ERR_INVALID_STATE. */
-esp_err_t nmos_control_set_mode(enum nmos_mode mode);
-/* API cycle is RA <-> BL; ON/OFF advance to RA. */
-esp_err_t nmos_control_next_mode(enum nmos_mode *out);
+/* One transition entry for HTTP, BLE and IO9. `mode` is input for SET and
+ * output on success. PWR-only is a transport access gate, not another policy. */
+enum nmos_change { NMOS_CHANGE_SET, NMOS_CHANGE_API_NEXT, NMOS_CHANGE_BUTTON_NEXT };
+esp_err_t nmos_control_change(enum nmos_change change, enum nmos_mode *mode, bool pwr_only);
+void nmos_control_snapshot(enum nmos_mode *mode, bool *saving, bool *loading);
+/* Pure name conversion; callers with a snapshot do not need another lock. */
+const char *nmos_mode_name(enum nmos_mode mode);
 
 /* Standard mode UI: false=power (boot default), true=environment. */
 bool environment_ui_selected(void);

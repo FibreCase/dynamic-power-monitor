@@ -162,21 +162,21 @@ static esp_err_t page_handler(httpd_req_t *req) {
 static esp_err_t control_get_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  bool enabled = !s_power_saving && !s_boot_loading;
-  xSemaphoreGive(s_mutex);
-  if (!enabled) {
+  enum nmos_mode mode;
+  bool saving, loading;
+  nmos_control_snapshot(&mode, &saving, &loading);
+  if (saving || loading) {
     httpd_resp_set_status(req, "409 Conflict");
     return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwr_required\"}");
   }
   char body[96];
   snprintf(body, sizeof(body), "{\"status\":\"ok\",\"power_mode\":\"PWR\",\"control_mode\":\"%s\"}",
-           nmos_control_mode_name());
+           nmos_mode_name(mode));
   return httpd_resp_sendstr(req, body);
 }
 
 static esp_err_t control_handler(httpd_req_t *req) {
-  char query[64], value[16], body[96];
+  char query[64], value[16];
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   size_t length = httpd_req_get_url_query_len(req);
@@ -193,26 +193,26 @@ static esp_err_t control_handler(httpd_req_t *req) {
       goto invalid_mode;
     }
   }
-  enum nmos_mode mode;
+  enum nmos_mode mode = NMOS_RA;
   esp_err_t err;
   if (!explicit_mode) {
-    err = nmos_control_next_mode(&mode);
+    err = nmos_control_change(NMOS_CHANGE_API_NEXT, &mode, true);
   } else {
     if (strcmp(value, "RA") == 0) mode = NMOS_RA;
     else if (strcmp(value, "ON") == 0) mode = NMOS_ON;
     else if (strcmp(value, "BL") == 0) mode = NMOS_BL;
     else if (strcmp(value, "OFF") == 0) mode = NMOS_OFF;
     else goto invalid_mode;
-    err = nmos_control_set_mode(mode);
+    err = nmos_control_change(NMOS_CHANGE_SET, &mode, true);
   }
   if (err == ESP_ERR_INVALID_STATE) {
     httpd_resp_set_status(req, "409 Conflict");
     return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwr_required\"}");
   }
   if (err != ESP_OK) goto invalid_mode;
-  snprintf(body, sizeof(body), "{\"status\":\"ok\",\"power_mode\":\"PWR\",\"control_mode\":\"%s\"}",
-           mode == NMOS_RA ? "RA" : mode == NMOS_ON ? "ON" : mode == NMOS_BL ? "BL" : "OFF");
-  return httpd_resp_sendstr(req, body);
+  /* Read back a single coherent snapshot: a power transition may have reset
+   * the accepted request to RA before this response is sent. */
+  return control_get_handler(req);
 invalid_mode:
   httpd_resp_set_status(req, "400 Bad Request");
   return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"invalid_control_mode\"}");

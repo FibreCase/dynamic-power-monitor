@@ -152,7 +152,7 @@ typedef uint32_t TickType_t;
 #define xSemaphoreTake(...) ((void)0)
 #define xSemaphoreGive(...) ((void)0)
 static uint32_t clock_ms, s_interval_ms=1000;static int waits, resets,notifies,radio_calls;
-static bool s_power_saving=true,s_boot_loading=true;
+static bool s_power_saving=true,s_boot_loading=true,fail_voltage,radio_enabled;
 static jmp_buf done;
 struct reading{float v,i,p,t;int64_t ts;};
 static TickType_t xTaskGetTickCount(void){return clock_ms;}
@@ -160,13 +160,14 @@ static uint32_t now_ms(void){return clock_ms;}
 static void vTaskDelay(unsigned ticks){clock_ms+=ticks;}
 static int xTaskDelayUntil(TickType_t *last,unsigned interval){
 if(waits++==14)longjmp(done,1);assert(interval==100||interval==1000);*last+=interval;clock_ms=*last;return pdTRUE;}
-static void wifi_set_enabled(bool enabled){assert(clock_ms>=2000);assert(enabled);radio_calls++;}
+static void wifi_set_enabled(bool enabled){assert(clock_ms>=2000);radio_enabled=enabled;radio_calls++;}
 static bool wifi_is_ready(void){return clock_ms>=3000&&clock_ms<4000;}
 static void set_sampling_interval(unsigned ms){s_interval_ms=ms;}
 static void nmos_control_reset(void){resets++;}
 static void http_api_notify_power_change(void){notifies++;}
 static void environment_sensor_notify_power_change(void){}
-static int ina226_read_voltage(float *v){*v=5;return 0;}
+static void ble_control_notify_power_change(void){}
+static int ina226_read_voltage(float *v){*v=5;return fail_voltage?1:0;}
 static float ina226_get_current_ma(void){return 100;}
 static float ina226_get_power_mw(void){return 500;}
 static float temp_sensor_read_celsius(void){return 25;}
@@ -175,7 +176,15 @@ static void reading_publish(struct reading *r){if(clock_ms<2000)assert(s_boot_lo
 ''' + code + '''
 int main(void){power_mode_monitor_start();if(!setjmp(done))sample_task(0);
 assert(resets==2&&notifies==2);assert(!s_boot_loading&&s_power_saving);assert(radio_calls>0);
-assert(clock_ms==5000);return 0;}
+assert(clock_ms==5000);
+clock_ms=3000;power_mode_update(5);assert(!s_power_saving&&radio_enabled);
+power_mode_update(4.49f);assert(s_power_saving&&!radio_enabled&&s_interval_ms==1000);
+int previous=resets;power_mode_update(0);assert(resets==previous);
+/* Never use the last good 5V reading after INA226 fails on battery. */
+waits=0;clock_ms=0;fail_voltage=true;power_mode_monitor_start();
+if(!setjmp(done))sample_task(0);
+assert(s_power_saving&&!radio_enabled&&s_interval_ms==1000&&!s_boot_loading);
+return 0;}
 ''')
 
     def test_wifi_retries_and_sleeps_when_stable(self):
@@ -231,7 +240,7 @@ typedef int esp_err_t;
 #define pdTRUE 1
 #define portMAX_DELAY UINT32_MAX
 #define pdMS_TO_TICKS(x) (x)
-static bool s_power_saving=true,s_boot_loading=true;static void *s_server;
+static bool s_power_saving=true,s_boot_loading=true,fail_voltage,radio_enabled;static void *s_server;
 static int starts,stops,waits;static jmp_buf done;
 static int http_server_start(void){if(++starts==2)return 9;s_server=(void*)1;return 0;}
 static int httpd_stop(void *h){assert(h);return ++stops==1?9:0;}

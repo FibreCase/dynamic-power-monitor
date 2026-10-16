@@ -394,3 +394,7 @@ The homepage polls `/api/v1/sensor` once per second for SHT40 ambient temperatur
 ### Firmware version
 
 `GET /api/v1/version` reports the running firmware: `status`, `version`, `idf_version`, `build_date`, `build_time`, and `elf_sha256`. The page footer shows the version and first eight ELF SHA256 characters to distinguish builds with identical version strings. Version refresh runs every 30 seconds and on manual synchronization. Available in PWR, like the other HTTP APIs.
+
+## Android BLE control
+
+Host the standalone [`web/ble.html`](web/ble.html) on your HTTPS server and open it in Android Chrome. It displays environmental readings and switches output modes over BLE in PWR and ECO. WiFi policy and sensor sampling intervals remain unchanged. See [setup, protocol and validation](docs/android-ble.md) (Chinese).

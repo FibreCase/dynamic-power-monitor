@@ -51,6 +51,7 @@ static char rx[8192];static size_t pos;
 static unsigned local_baud=115200,module_baud=115200,pending_baud=115200,saved_baud;
 static unsigned writes,resets,notify_count,queries;
 static int scenario;
+static bool s_power_saving=true;
 static jmp_buf done;
 static int64_t esp_timer_get_time(void){return now;}
 static int uart_read_bytes(int p,uint8_t *b,int n,int ticks){if(rx[pos]){*b=rx[pos++];return 1;}now+=25000;return 0;}

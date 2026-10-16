@@ -198,7 +198,10 @@ static void display_task(void *arg) {
       display_splash("Loading...");
     else
       oled_live_render();
-    vTaskDelay(pdMS_TO_TICKS(OLED_REFRESH_MS));
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool saving = s_power_saving && !s_boot_loading;
+    xSemaphoreGive(s_mutex);
+    vTaskDelay(pdMS_TO_TICKS(saving ? 500u : OLED_REFRESH_MS));
   }
 }
 

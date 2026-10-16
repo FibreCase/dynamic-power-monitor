@@ -2,6 +2,7 @@
  * exactly one owner; no background reports can be mistaken for command ACKs. */
 #include "radar_at.h"
 #include "config.h"
+#include "core.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -172,7 +173,10 @@ static void worker(void *arg) {
   for (;;) {
     if (!ulTaskNotifyTake(pdTRUE,0)) {
       uint8_t bytes[128];
-      int count=uart_read_bytes(UART_PORT,bytes,sizeof(bytes),pdMS_TO_TICKS(50)+1);
+      xSemaphoreTake(s_mutex,portMAX_DELAY);
+      bool saving=s_power_saving;
+      xSemaphoreGive(s_mutex);
+      int count=uart_read_bytes(UART_PORT,bytes,sizeof(bytes),pdMS_TO_TICKS(saving?500:50)+1);
       if (count>0) output_record(bytes,count);
       continue;
     }

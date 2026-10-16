@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>5V 蓝牙控制器</title><style>
+:root{color-scheme:light dark;--bg:#f2f6ef;--text:#17251b;--muted:#526858;--card:#fff;--border:#d5dfd2;--accent:#356b22;--badge:#e3efdd;--badge-text:#356b22;--detail:#344d3b;--error:#a22a23;--rail:#d7e3d0;--thumb-border:#fff;--footer:#647969}
+@media(prefers-color-scheme:dark){:root{--bg:#111613;--text:#edf5ee;--muted:#a4b4a7;--card:#1a231d;--border:#334338;--accent:#c3ed9d;--badge:#24352a;--badge-text:#abd7b4;--detail:#cad6cc;--error:#ffb4a8;--rail:#3c4e3f;--thumb-border:#1a231d;--footer:#91a496}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;min-height:100vh;min-height:100svh;display:grid;place-items:center;padding:24px}
+.panel{width:min(100%,460px)}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px}
+.brand{font-size:14px;color:var(--muted);letter-spacing:.06em}.badge{font-size:12px;color:var(--badge-text);background:var(--badge);padding:6px 10px;border-radius:20px}
+h1{font-size:32px;font-weight:600;letter-spacing:-.04em;margin:0 0 10px}.intro{color:var(--muted);line-height:1.6;margin:0 0 32px}
+.card+.card{margin-top:20px}.pwm-row{margin-top:20px}.pwm-note{font-size:13px;color:var(--muted);line-height:1.6}.percent{color:var(--accent);font-weight:600}.card{background:var(--card);border:1px solid var(--border);border-radius:22px;padding:28px}.row{display:flex;align-items:center;justify-content:space-between}
+.caption{font-size:13px;color:var(--muted)}.mode{font-size:32px;font-weight:600;color:var(--accent)}
+.slider{appearance:none;-webkit-appearance:none;width:100%;height:64px;background:transparent;cursor:pointer;margin:24px 0 6px;touch-action:pan-y;accent-color:var(--accent)}
+.slider::-webkit-slider-runnable-track{height:12px;background:var(--rail);border-radius:12px}
+.slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:44px;height:44px;border-radius:50%;background:var(--accent);border:4px solid var(--thumb-border);box-shadow:0 2px 8px #0003;margin-top:-16px}
+.slider::-moz-range-track{height:12px;background:var(--rail);border-radius:12px}
+.slider::-moz-range-thumb{width:36px;height:36px;border-radius:50%;background:var(--accent);border:4px solid var(--thumb-border);box-shadow:0 2px 8px #0003}
+.slider:focus-visible{outline:3px solid var(--accent);outline-offset:5px;border-radius:14px}
+.slider:disabled{opacity:.4;cursor:wait}.labels{display:flex;justify-content:space-between;font-size:16px;color:var(--muted)}.labels span.active{color:var(--accent);font-weight:600}
+.detail{min-height:48px;margin:24px 0 0;line-height:1.6;font-size:14px;color:var(--detail)}.status{min-height:42px;font-size:13px;line-height:1.5;color:var(--muted);margin:18px 0}.status.error{color:var(--error)}
+button{min-height:44px;border:1px solid var(--border);background:transparent;color:var(--detail);border-radius:10px;padding:10px 18px;font:inherit;font-size:14px;cursor:pointer}button:disabled{opacity:.4}
+select,input[type=number]{width:100%;min-height:48px;margin:10px 0 16px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);font:inherit}
+dialog{width:min(94vw,560px);max-height:85vh;overflow:auto;border:1px solid var(--border);border-radius:18px;background:var(--card);color:var(--text);padding:24px}dialog::backdrop{background:#0008}dialog h2{margin:0}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px 6px;border-bottom:1px solid var(--border)}td:last-child{text-align:right} .radar-actions{display:flex;gap:10px;flex-wrap:wrap}
+#radar-stream{height:45vh;min-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;font:13px/1.6 ui-monospace,monospace}#radar-monitor-dialog{width:min(94vw,720px)}
+h2.section-title{font-size:18px;margin:0 0 18px}.sensor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px}.sensor-grid.air{grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--border);padding-top:18px;margin-top:20px}.sensor-label{font-size:12px;color:var(--muted);line-height:1.6}.sensor-value{font-size:clamp(21px,6vw,28px);font-weight:600;color:var(--accent);font-variant-numeric:tabular-nums;margin-top:4px;overflow-wrap:anywhere}.sensor-value small{font-size:12px;font-weight:400;color:var(--muted)}#sensor-co2.unsettled{text-decoration:line-through}
+footer{font-size:12px;color:var(--footer);margin-top:24px;line-height:1.6}
+@media(max-width:420px){body{padding:20px}.card{padding:24px}header{margin-bottom:28px}}
+
+.connection-actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px}
+</style></head><body><main class="panel">
+<header><span class="brand">5V · BLUETOOTH</span><span id="power" class="badge">未连接</span></header>
+<h1>设备控制</h1><p class="intro">通过蓝牙查看环境与控制输出，PWR / ECO 均可使用。</p>
+<div class="connection-actions"><button id="connect" type="button">连接蓝牙</button><button id="disconnect" type="button" disabled>断开连接</button></div>
+<section class="card" aria-labelledby="sensor-title">
+<h2 id="sensor-title" class="section-title">环境读数</h2>
+<div class="sensor-grid">
+<div><div class="sensor-label">实际温度 · SHT40</div><div class="sensor-value"><span id="sensor-temperature">--</span> <small>°C</small></div></div>
+<div><div class="sensor-label">实际湿度 · SHT40</div><div class="sensor-value"><span id="sensor-humidity">--</span> <small>%RH</small></div></div>
+<div><div class="sensor-label">校准温度 · AHT21</div><div class="sensor-value"><span id="sensor-comp-temperature">--</span> <small>°C</small></div></div>
+<div><div class="sensor-label">校准湿度 · AHT21</div><div class="sensor-value"><span id="sensor-comp-humidity">--</span> <small>%RH</small></div></div>
+</div>
+<div class="sensor-grid air">
+<div><div class="sensor-label">CO₂（估算）</div><div class="sensor-value"><span id="sensor-co2">--</span> <small>ppm</small></div></div>
+<div><div class="sensor-label">TVOC</div><div class="sensor-value"><span id="sensor-tvoc">--</span> <small>ppb</small></div></div>
+<div><div class="sensor-label">AQI 等级</div><div id="sensor-aqi" class="sensor-value">--</div></div>
+</div>
+<p class="pwm-note">校准温湿度为 AHT21 提供给 ENS160 的补偿读数。</p>
+<p id="sensor-status" class="pwm-note" role="status" aria-live="polite">正在读取环境数据…</p>
+</section>
+<section class="card" aria-label="控制模式">
+<div class="row"><span class="caption">当前模式</span><output id="mode" class="mode" for="slider">--</output></div>
+<input id="slider" class="slider" type="range" min="0" max="3" step="1" value="0" aria-label="选择 RA、BL、ON 或 OFF 模式" disabled>
+<div class="labels" aria-hidden="true"><span>RA</span><span>BL</span><span>ON</span><span>OFF</span></div>
+<p id="detail" class="detail">正在读取设备状态…</p>
+</section>
+
+<p id="status" class="status" role="status" aria-live="polite">点击连接蓝牙，选择附近的 5V 设备。</p>
+<footer>仅连接附近设备，无需设备联网。校准温湿度为 ENS160 的补偿读数。电源模式切换后控制模式回到 RA。</footer>
+</main><script>
+'use strict';
+const SERVICE='5e7a0001-8e6d-4b28-a5c1-9f0260d84e31';
+const STATE='5e7a0002-8e6d-4b28-a5c1-9f0260d84e31';
+const MODE='5e7a0003-8e6d-4b28-a5c1-9f0260d84e31';
+const $=id=>document.getElementById(id);
+const slider=$('slider'),power=$('power'),connect=$('connect'),disconnect=$('disconnect');
+const names=['RA','ON','BL','OFF'];
+const sensorFields={'sensor-temperature':['temperature_c',1],'sensor-humidity':['humidity_rh_pct',1],'sensor-comp-temperature':['compensation_temperature_c',1],'sensor-comp-humidity':['compensation_humidity_rh_pct',1],'sensor-co2':['eco2_ppm',0],'sensor-tvoc':['tvoc_ppb',0],'sensor-aqi':['aqi',0]};
+let stateFresh=false;
+let device=null,stateCharacteristic=null,modeCharacteristic=null,generation=0,queue=Promise.resolve(),pollPending=false,connecting=false,sending=false,dragging=false,snapshot=null,choices=['RA','BL','ON','OFF'];
+function message(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
+function controls(){connect.disabled=connecting||!!stateCharacteristic;disconnect.disabled=!device;slider.disabled=!stateCharacteristic||sending||!stateFresh||!snapshot||snapshot.loading;}
+function clearSensors(){for(const id of Object.keys(sensorFields))$(id).textContent='--';$('sensor-co2').classList.toggle('unsettled',false);}
+function show(mode){$('mode').textContent=mode;slider.value=String(choices.indexOf(mode));slider.setAttribute('aria-valuetext',mode);const descriptions={RA:snapshot?.saving?'雷达控制 · CTL1 跟随雷达，CTL2 关闭。':'雷达控制 · 有人时两路开启，无人时关闭。',BL:'单路雷达控制 · CTL1 跟随雷达，CTL2 始终关闭。',ON:'常开 · 两路持续高电平，固定 100%。',OFF:'关闭 · CTL1、CTL2 均保持关闭。'};$('detail').textContent=descriptions[mode]||'正在读取设备状态…';document.querySelectorAll('.labels span').forEach(el=>el.classList.toggle('active',el.textContent===mode));}
+function decode(view){if(view.byteLength!==28||view.getUint8(0)!==1)throw Error('protocol');const flags=view.getUint8(1),mode=names[view.getUint8(2)];if(!mode)throw Error('protocol');return{loading:!!(flags&1),saving:!!(flags&2),available:!!(flags&4)&&!(flags&8),mode,reading:{temperature_c:view.getFloat32(4,true),humidity_rh_pct:view.getFloat32(8,true),compensation_temperature_c:view.getFloat32(12,true),compensation_humidity_rh_pct:view.getFloat32(16,true),eco2_ppm:view.getUint16(20,true),tvoc_ppb:view.getUint16(22,true),aqi:view.getUint8(24),validity:['normal','warmup','startup','invalid'][view.getUint8(3)&3]}};}
+function render(next){stateFresh=true;const changed=snapshot&&snapshot.saving!==next.saving;snapshot=next;power.textContent=next.loading?'Loading…':next.saving?'ECO':'PWR';if(!dragging||changed){dragging=false;choices=next.saving?['RA','ON','OFF']:['RA','BL','ON','OFF'];slider.max=String(choices.length-1);const labels=document.querySelector('.labels');labels.replaceChildren();for(const name of choices){const span=document.createElement('span');span.textContent=name;labels.append(span);}show(next.mode);}const r=next.reading;const available=next.available&&Object.values(sensorFields).every(([key])=>Number.isFinite(r[key]));if(available){for(const [id,[key,digits]] of Object.entries(sensorFields))$(id).textContent=r[key].toFixed(digits);$('sensor-co2').classList.toggle('unsettled',r.validity==='warmup'||r.validity==='startup');const validity={normal:'正常',warmup:'预热中，空气质量读数尚未稳定',startup:'启动中，空气质量读数尚未稳定',invalid:'空气质量读数无效'};$('sensor-status').textContent=validity[r.validity]+' · '+(next.saving?'每 10 秒采样':'每秒采样');}else{clearSensors();$('sensor-status').textContent='环境数据暂不可用，等待下一次采样。';}$('sensor-status').classList.toggle('error',!available||r.validity==='invalid');controls();}
+function serialized(fn){const token=generation;const result=queue.then(()=>{if(token!==generation||!stateCharacteristic)throw Error('disconnected');return fn(token);});queue=result.catch(()=>{});return result;}
+async function readState(token){const value=await stateCharacteristic.readValue();if(token!==generation)throw Error('disconnected');const data=decode(value);render(data);return data;}
+function offline(text){++generation;queue=Promise.resolve();stateFresh=false;pollPending=false;device=null;stateCharacteristic=modeCharacteristic=null;snapshot=null;connecting=sending=dragging=false;power.textContent='未连接';$('mode').textContent='--';$('detail').textContent='连接设备后选择控制模式。';clearSensors();$('sensor-status').textContent='蓝牙未连接';message(text);controls();}
+connect.addEventListener('click',async()=>{if(connecting||stateCharacteristic)return;if(!window.isSecureContext||!navigator.bluetooth){message('请使用 Android Chrome 打开服务器的 HTTPS 页面。',true);return;}connecting=true;controls();message('请选择附近的设备…');const token=++generation;let selected=null;try{selected=await navigator.bluetooth.requestDevice({filters:[{services:[SERVICE]}]});if(token!==generation){selected.gatt.disconnect();return;}device=selected;controls();selected.addEventListener('gattserverdisconnected',()=>{if(device===selected)offline('蓝牙已断开，点击连接蓝牙重新连接。');});const server=await selected.gatt.connect();const service=await server.getPrimaryService(SERVICE);const state=await service.getCharacteristic(STATE),mode=await service.getCharacteristic(MODE);if(token!==generation){selected.gatt.disconnect();return;}stateCharacteristic=state;modeCharacteristic=mode;await serialized(readState);if(token===generation)message('已连接 '+selected.name);}catch(error){if(token===generation){if(selected?.gatt.connected)selected.gatt.disconnect();offline(error.name==='NotFoundError'?'未选择设备，点击连接蓝牙重试。':'蓝牙连接失败，请确认固件支持 BLE 后重试。');}}finally{if(token===generation)connecting=false;controls();}});
+disconnect.addEventListener('click',()=>{const old=device;offline('已断开蓝牙连接。');old?.gatt.disconnect();});
+async function poll(){if(pollPending||!stateCharacteristic||document.hidden)return;pollPending=true;const token=generation;try{await serialized(readState);}catch(error){if(token===generation){stateFresh=false;power.textContent='待同步';controls();clearSensors();$('sensor-status').textContent='读取失败，正在重试。';message('状态读取失败，等待重试；持续失败可断开后重连。',true);}}finally{if(token===generation)pollPending=false;}}
+slider.addEventListener('pointerdown',()=>{dragging=true;});slider.addEventListener('pointercancel',()=>{dragging=false;if(snapshot)show(snapshot.mode);});window.addEventListener('pointerup',()=>{dragging=false;});
+slider.addEventListener('input',()=>{show(choices[Number(slider.value)]);message('松开滑块后应用');});
+slider.addEventListener('change',async()=>{dragging=false;if(sending||!stateFresh||!snapshot||!stateCharacteristic)return;const desired=choices[Number(slider.value)];if(!desired)return;if(desired===snapshot.mode){message('模式未改变');return;}sending=true;controls();message('正在应用 '+desired+'…');const token=generation;try{await serialized(async token=>{await modeCharacteristic.writeValueWithResponse(Uint8Array.of(names.indexOf(desired)));if(token!==generation)throw Error('disconnected');return readState(token);});if(token===generation)message('当前模式：'+snapshot.mode);}catch(error){if(token===generation){stateFresh=false;if(snapshot)show(snapshot.mode);message('切换未确认，正在同步实际状态；ECO 下不支持 BL，启动期间不能切换。',true);poll();}}finally{if(token===generation)sending=false;controls();}});
+controls();setInterval(poll,1000);
+</script></body></html>

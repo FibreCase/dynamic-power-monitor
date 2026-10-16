@@ -149,40 +149,53 @@ enum nmos_mode nmos_control_mode(void) {
   return mode;
 }
 
-const char *nmos_control_mode_name(void) {
-  switch (nmos_control_mode()) {
+const char *nmos_mode_name(enum nmos_mode mode) {
+  switch (mode) {
   case NMOS_ON: return "ON";
   case NMOS_BL: return "BL";
   case NMOS_OFF: return "OFF";
   default: return "RA";
   }
 }
-
-esp_err_t nmos_control_set_mode(enum nmos_mode mode) {
-  if (mode != NMOS_RA && mode != NMOS_ON && mode != NMOS_BL && mode != NMOS_OFF)
-    return ESP_ERR_INVALID_ARG;
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  if (s_power_saving || s_boot_loading) {
-    xSemaphoreGive(s_mutex);
-    return ESP_ERR_INVALID_STATE;
-  }
-  atomic_store(&s_nmos_mode, mode);
-  xSemaphoreGive(s_mutex);
-  ESP_LOGI(TAG, "NMOS API mode: %s", mode == NMOS_RA ? "RA" : mode == NMOS_ON ? "ON" : mode == NMOS_BL ? "BL" : "OFF");
-  return ESP_OK;
+const char *nmos_control_mode_name(void) {
+  return nmos_mode_name(nmos_control_mode());
 }
 
-esp_err_t nmos_control_next_mode(enum nmos_mode *out) {
-  if (!out) return ESP_ERR_INVALID_ARG;
+void nmos_control_snapshot(enum nmos_mode *mode, bool *saving, bool *loading) {
   xSemaphoreTake(s_mutex, portMAX_DELAY);
-  if (s_power_saving || s_boot_loading) {
+  *mode = atomic_load(&s_nmos_mode);
+  *saving = s_power_saving;
+  *loading = s_boot_loading;
+  xSemaphoreGive(s_mutex);
+}
+
+esp_err_t nmos_control_change(enum nmos_change change, enum nmos_mode *mode, bool pwr_only) {
+  if (!mode || change < NMOS_CHANGE_SET || change > NMOS_CHANGE_BUTTON_NEXT)
+    return ESP_ERR_INVALID_ARG;
+  if (change == NMOS_CHANGE_SET &&
+      (*mode < NMOS_RA || *mode > NMOS_OFF)) return ESP_ERR_INVALID_ARG;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  if (s_boot_loading || (pwr_only && s_power_saving)) {
     xSemaphoreGive(s_mutex);
     return ESP_ERR_INVALID_STATE;
   }
-  int current = atomic_load(&s_nmos_mode);
-  *out = current == NMOS_RA ? NMOS_BL : NMOS_RA;
-  atomic_store(&s_nmos_mode, *out);
+  enum nmos_mode next = change == NMOS_CHANGE_SET ? *mode : NMOS_RA;
+  enum nmos_mode current = atomic_load(&s_nmos_mode);
+  if (change == NMOS_CHANGE_API_NEXT) {
+    next = !s_power_saving && current == NMOS_RA ? NMOS_BL : NMOS_RA;
+  } else if (change == NMOS_CHANGE_BUTTON_NEXT) {
+    next = current == NMOS_RA ? NMOS_ON :
+           current == NMOS_ON ? (s_power_saving ? NMOS_OFF : NMOS_BL) :
+           current == NMOS_BL ? NMOS_OFF : NMOS_RA;
+  }
+  if (s_power_saving && next == NMOS_BL) {
+    xSemaphoreGive(s_mutex);
+    return ESP_ERR_INVALID_STATE;
+  }
+  atomic_store(&s_nmos_mode, next);
+  *mode = next;
   xSemaphoreGive(s_mutex);
+  ESP_LOGI(TAG, "NMOS mode: %s", nmos_mode_name(next));
   return ESP_OK;
 }
 
@@ -230,15 +243,8 @@ static void status_task(void *arg) {
         if (now - button_pressed_at >= CFG_BUTTON_LONG_PRESS_MS) {
           button_long_press();
         } else {
-          xSemaphoreTake(s_mutex, portMAX_DELAY);
-          bool saving = s_power_saving;
-          enum nmos_mode current = atomic_load(&s_nmos_mode);
-          enum nmos_mode next = current == NMOS_RA ? NMOS_ON :
-              current == NMOS_ON ? (saving ? NMOS_OFF : NMOS_BL) :
-              current == NMOS_BL ? NMOS_OFF : NMOS_RA;
-          atomic_store(&s_nmos_mode, next);
-          xSemaphoreGive(s_mutex);
-          ESP_LOGI(TAG, "NMOS mode: %s", nmos_control_mode_name());
+          enum nmos_mode next = NMOS_RA;
+          nmos_control_change(NMOS_CHANGE_BUTTON_NEXT, &next, false);
         }
       }
     }

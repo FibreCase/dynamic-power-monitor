@@ -394,3 +394,7 @@ node tests/test_radar_web.cjs
 ### 固件版本
 
 `GET /api/v1/version` 返回当前运行固件的 `status`、`version`、`idf_version`、`build_date`、`build_time` 和 `elf_sha256`。例如：`curl http://power.local/api/v1/version`，地址按实际设备替换。网页底部显示版本及 ELF SHA256 前 8 位，用于区分版本号相同的不同构建；完整构建信息可通过接口获取。网页每 30 秒刷新版本，点击“重新同步”也会刷新。与其他 HTTP API 一样仅 PWR 下可用。
+
+## Android 蓝牙控制
+
+新增独立页面 [`web/ble.html`](web/ble.html)，部署到 HTTPS 服务器后可用 Android Chrome 连接设备 BLE，在 PWR / ECO 下查看环境读数及切换控制模式。使用与部署、协议和验证说明见 [Android 蓝牙控制](docs/android-ble.md)。
