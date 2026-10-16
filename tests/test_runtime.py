@@ -242,17 +242,19 @@ typedef int esp_err_t;
 #define pdMS_TO_TICKS(x) (x)
 static bool s_power_saving=true,s_boot_loading=true,fail_voltage,radio_enabled;static void *s_server;
 static int starts,stops,waits;static jmp_buf done;
+static bool mdns_on;
+static int network_mdns_set_enabled(bool enabled){if(enabled)assert(!s_power_saving&&!s_boot_loading&&s_server);mdns_on=enabled;return 0;}
 static int http_server_start(void){if(++starts==2)return 9;s_server=(void*)1;return 0;}
-static int httpd_stop(void *h){assert(h);return ++stops==1?9:0;}
+static int httpd_stop(void *h){assert(h&&!mdns_on);return ++stops==1?9:0;}
 static void ulTaskNotifyTake(int clear,uint32_t delay){
 switch(++waits){
 case 1:assert(delay==portMAX_DELAY&&!s_server);s_boot_loading=false;s_power_saving=false;break;
-case 2:assert(delay==portMAX_DELAY&&s_server);s_power_saving=true;break;
+case 2:assert(delay==portMAX_DELAY&&s_server&&mdns_on);s_power_saving=true;break;
 case 3:assert(delay==1000&&s_server);break;
 case 4:assert(delay==portMAX_DELAY&&!s_server);s_power_saving=false;break;
 case 5:assert(delay==1000&&!s_server);break;
 case 6:assert(delay==portMAX_DELAY&&s_server);s_power_saving=true;break;
-case 7:assert(delay==portMAX_DELAY&&!s_server);longjmp(done,1);
+case 7:assert(delay==portMAX_DELAY&&!s_server&&!mdns_on);longjmp(done,1);
 default:assert(0);}}
 ''' + code + '''
 int main(void){if(!setjmp(done))http_control_task(0);assert(starts==3&&stops==3);return 0;}

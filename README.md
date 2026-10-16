@@ -106,7 +106,7 @@ Edit `main/config.h` for WiFi, hostname, OTA URL, GPIO and INA226 calibration. T
 | Setting | Default / purpose |
 |---|---|
 | `CFG_WIFI_SSID` / `CFG_WIFI_PASS` | Replace credential placeholders |
-| `CFG_HOSTNAME` | `power-monitor`, DHCP hostname, no domain suffix, 1–32 characters |
+| `CFG_HOSTNAME` | `power-monitor`, DHCP/mDNS hostname, no domain suffix, 1–32 characters |
 | `CFG_NTP_HOST` | `ntp.aliyun.com` |
 | `CFG_OTA_URL` | Full application `.bin` URL; configure for your deployment |
 | `CFG_MAX_CURRENT_A` / `CFG_SHUNT_OHM` | 10A / 0.005Ω; match the actual shunt |
@@ -142,14 +142,14 @@ Use `deactivate` to exit the Python venv; closing the terminal clears this sessi
 
 The HTTP server listens on port **80** only in **PWR**. Entering **ECO** stops
 the server and closes connections; returning to PWR starts it again. HTTP is
-also disabled during startup and the following 2-second grace period. Examples use `power-monitor.lan`; the suffix depends on router DHCP hostname resolution. Use the device IP if necessary. The project does not provide mDNS `.local` resolution.
+also disabled during startup and the following 2-second grace period. Examples use `power-monitor.local`, resolved by mDNS on the same LAN. The name reuses `CFG_HOSTNAME` (without the `.local` suffix in configuration); the device also advertises `_http._tcp` on port 80. mDNS starts only after the PWR HTTP server starts and is fully freed in ECO. Initialization failures are retried without blocking sampling or disabling HTTP. Use the device IP if your client/network does not support mDNS.
 
 ### GET /api/v1/sensor
 
 Returns a cached snapshot without waiting for a sensor measurement.
 
 ```sh
-curl http://power-monitor.lan/api/v1/sensor
+curl http://power-monitor.local/api/v1/sensor
 ```
 
 Example successful response:
@@ -189,7 +189,7 @@ Not-ready, read/CRC/device errors and invalid output return HTTP 503 with `statu
 
 ### Web control / GET /api/v1/control
 
-Open `http://power-monitor.lan/` (or the device IP) in PWR. A four-position
+Open `http://power-monitor.local/` (or the device IP) in PWR. A four-position
 slider selects `RA / BL / ON / OFF` on release. State synchronizes every 5 seconds
 and with the refresh button, including IO9 changes. Network failures disable
 the slider until synchronization succeeds. ECO stops the page and API.
@@ -199,8 +199,8 @@ the slider until synchronization succeeds. ECO stops the page and API.
 Rebuilding after editing HTML updates the firmware page without file uploads.
 
 ```sh
-curl http://power-monitor.lan/api/v1/control
-curl --compressed http://power-monitor.lan/
+curl http://power-monitor.local/api/v1/control
+curl --compressed http://power-monitor.local/
 ```
 
 GET queries without changing mode:
@@ -215,7 +215,7 @@ Omit `mode` to cycle `RA ↔ BL`; from ON or OFF, the next mode is RA.
 Explicit `?mode=ON` remains supported; IO9 cycling is unchanged.
 
 ```sh
-curl -X POST http://power-monitor.lan/api/v1/control
+curl -X POST http://power-monitor.local/api/v1/control
 ```
 
 
@@ -224,9 +224,9 @@ Set control mode in PWR only. Optional, case-sensitive `mode` is `RA`, `ON`, `BL
 and the UI reflects the shared mode.
 
 ```sh
-curl -X POST 'http://power-monitor.lan/api/v1/control?mode=RA'
-curl -X POST 'http://power-monitor.lan/api/v1/control?mode=ON'
-curl -X POST 'http://power-monitor.lan/api/v1/control?mode=BL'
+curl -X POST 'http://power-monitor.local/api/v1/control?mode=RA'
+curl -X POST 'http://power-monitor.local/api/v1/control?mode=ON'
+curl -X POST 'http://power-monitor.local/api/v1/control?mode=BL'
 ```
 
 Successful HTTP 200 response:
@@ -258,8 +258,8 @@ Without an NVS record, defaults are `CFG_CTL1_PWM_DUTY_PCT` and
 timer frequency. 100% is steady HIGH; 0% steady LOW.
 
 ```sh
-curl http://power-monitor.lan/api/v1/pwm
-curl -X POST 'http://power-monitor.lan/api/v1/pwm?ctl1=35&ctl2=65'
+curl http://power-monitor.local/api/v1/pwm
+curl -X POST 'http://power-monitor.local/api/v1/pwm?ctl1=35&ctl2=65'
 ```
 
 ```json
@@ -276,7 +276,7 @@ for outputs currently disabled by radar or mode policy.
 Without parameters, download from `CFG_OTA_URL`:
 
 ```sh
-curl -X POST http://power-monitor.lan/api/ota/update
+curl -X POST http://power-monitor.local/api/ota/update
 ```
 
 Override the URL for this update only:
@@ -284,7 +284,7 @@ Override the URL for this update only:
 ```sh
 curl -X POST -G \
   --data-urlencode 'url=http://192.168.1.100:8000/firmware.bin' \
-  'http://power-monitor.lan/api/ota/update'
+  'http://power-monitor.local/api/ota/update'
 ```
 
 HTTP/HTTPS URLs are supported, with at most 255 decoded bytes. URL-encode the parameter. Uppercase `-X` selects the method; lowercase `-x` configures a proxy. Opening this update endpoint in a browser sends GET and returns 405.

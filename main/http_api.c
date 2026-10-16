@@ -1,5 +1,6 @@
 /* Device HTTP API, listening on port 80. */
 #include "http_api.h"
+#include "mdns_service.h"
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -462,6 +463,7 @@ static void http_control_task(void *arg) {
     bool enabled = !s_power_saving && !s_boot_loading;
     xSemaphoreGive(s_mutex);
     esp_err_t err = ESP_OK;
+    if (!enabled) network_mdns_set_enabled(false);
     if (enabled && !s_server) {
       err = http_server_start();
       if (err == ESP_OK) ESP_LOGI("http", "PWR: HTTP listening on port 80");
@@ -472,8 +474,10 @@ static void http_control_task(void *arg) {
         ESP_LOGI("http", "ECO: HTTP stopped");
       }
     }
+    if (err == ESP_OK && enabled && s_server)
+      err = network_mdns_set_enabled(true);
     if (err != ESP_OK)
-      ESP_LOGW("http", "server state change failed: %s", esp_err_to_name(err));
+      ESP_LOGW("http", "network service state change failed: %s", esp_err_to_name(err));
     ulTaskNotifyTake(pdTRUE, err == ESP_OK ? portMAX_DELAY : pdMS_TO_TICKS(1000));
   }
 }

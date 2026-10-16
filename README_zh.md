@@ -141,14 +141,14 @@ idf.py -B build-5v -p /dev/ttyACM0 flash monitor
 
 ## HTTP API
 
-HTTP 服务仅在 **PWR** 下监听 **80 端口**，进入 **ECO** 时停止服务并关闭连接；回到 PWR 自动重启服务。启动及前 2 秒也不启用 HTTP。下面示例使用 `power-monitor.lan`；域名后缀取决于路由器的 DHCP 主机名解析，也可替换为设备 IP。项目不提供 mDNS `.local` 解析。
+HTTP 服务仅在 **PWR** 下监听 **80 端口**，进入 **ECO** 时停止服务并关闭连接；回到 PWR 自动重启服务。启动及前 2 秒也不启用 HTTP。下面示例使用 `power-monitor.local`，通过同一局域网内的 mDNS 解析，名称复用 `CFG_HOSTNAME`（配置值不带 `.local` 后缀），同时广播 80 端口的 `_http._tcp` 服务。mDNS 随 PWR HTTP 服务启动，ECO 下释放任务及定时器；初始化失败自动重试，不阻塞采样或影响 HTTP 启动。若客户端或网络不支持 mDNS，可使用设备 IP。
 
 ### GET /api/v1/sensor
 
 返回环境缓存，不在请求中等待传感器测量。
 
 ```sh
-curl http://power-monitor.lan/api/v1/sensor
+curl http://power-monitor.local/api/v1/sensor
 ```
 
 成功响应示例：
@@ -188,7 +188,7 @@ ENS160 没有新气体数据时，保留之前气体读数并更新温湿度。�
 
 ### 网页控制 / GET /api/v1/control
 
-PWR 下打开 `http://power-monitor.lan/`，或使用设备 IP。页面提供四档滑块，
+PWR 下打开 `http://power-monitor.local/`，或使用设备 IP。页面提供四档滑块，
 按 `RA / BL / ON / OFF` 排列，松开后设置对应模式。每 5 秒自动同步，
 也可点击“重新同步”；IO9 操作同样反映在页面上。断连后禁用滑块，
 恢复 PWR 后可重新同步。ECO 下网页和 API 均关闭。
@@ -198,8 +198,8 @@ PWR 下打开 `http://power-monitor.lan/`，或使用设备 IP。页面提供四
 修改 HTML 后重新构建即可更新页面，无需额外上传文件。
 
 ```sh
-curl http://power-monitor.lan/api/v1/control
-curl --compressed http://power-monitor.lan/
+curl http://power-monitor.local/api/v1/control
+curl --compressed http://power-monitor.local/
 ```
 
 GET 控制接口只查询、不切换：
@@ -214,7 +214,7 @@ GET 控制接口只查询、不切换：
 仍可通过 `?mode=ON` 显式选择 ON；IO9 的短按顺序保持不变。
 
 ```sh
-curl -X POST http://power-monitor.lan/api/v1/control
+curl -X POST http://power-monitor.local/api/v1/control
 ```
 
 
@@ -222,9 +222,9 @@ curl -X POST http://power-monitor.lan/api/v1/control
 无需请求体，输出在状态任务下一次更新时生效（约 50ms），屏幕同步显示。
 
 ```sh
-curl -X POST 'http://power-monitor.lan/api/v1/control?mode=RA'
-curl -X POST 'http://power-monitor.lan/api/v1/control?mode=ON'
-curl -X POST 'http://power-monitor.lan/api/v1/control?mode=BL'
+curl -X POST 'http://power-monitor.local/api/v1/control?mode=RA'
+curl -X POST 'http://power-monitor.local/api/v1/control?mode=ON'
+curl -X POST 'http://power-monitor.local/api/v1/control?mode=BL'
 ```
 
 成功返回 HTTP 200：
@@ -255,8 +255,8 @@ CTL1（IO7）和 CTL2（IO6）均使用 LEDC 20kHz、8 位 PWM。每路分别保
 配置，两路共用定时器。100% 持续高电平，0% 持续低电平。
 
 ```sh
-curl http://power-monitor.lan/api/v1/pwm
-curl -X POST 'http://power-monitor.lan/api/v1/pwm?ctl1=35&ctl2=65'
+curl http://power-monitor.local/api/v1/pwm
+curl -X POST 'http://power-monitor.local/api/v1/pwm?ctl1=35&ctl2=65'
 ```
 
 ```json
@@ -273,7 +273,7 @@ POST 必须同时指定 ctl1、ctl2，使用 0–100 的整数；非法参数返
 不带参数时，从 `CFG_OTA_URL` 下载应用固件：
 
 ```sh
-curl -X POST http://power-monitor.lan/api/ota/update
+curl -X POST http://power-monitor.local/api/ota/update
 ```
 
 临时指定本次下载 URL，不修改默认配置：
@@ -281,7 +281,7 @@ curl -X POST http://power-monitor.lan/api/ota/update
 ```sh
 curl -X POST -G \
   --data-urlencode 'url=http://192.168.1.100:8000/firmware.bin' \
-  'http://power-monitor.lan/api/ota/update'
+  'http://power-monitor.local/api/ota/update'
 ```
 
 `url` 支持 HTTP/HTTPS，解码后最多 255 字节，必须正确 URL 编码。`-X` 是请求方法，`-x` 是代理配置。浏览器地址栏发送 GET，该升级接口会返回 405。
