@@ -8,6 +8,7 @@
 #include "sample_task.h"
 #include "status.h"
 #include "pwm_settings.h"
+#include "radar_at.h"
 #include "temp_sensor.h"
 #include "u8g2_esp_hal.h"
 #include "wifi_ntp.h"
@@ -96,6 +97,7 @@ void app_main(void) {
 
   ESP_ERROR_CHECK(e);
   ESP_ERROR_CHECK(pwm_settings_init());
+  ESP_ERROR_CHECK(radar_at_init());
   status_init_gpio(); // Persistent duties restored before enabling outputs.
   ESP_ERROR_CHECK(wifi_background_start());
 

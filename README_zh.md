@@ -12,7 +12,7 @@
 
 | 引脚 | 用途 | 行为 |
 |---|---|---|
-| IO0 | HLK-LD2410C-P OUT | 内部下拉；高电平有人，低电平无人 |
+| IO0 | 雷达 OUT | 内部下拉；高电平有人，低电平无人 |
 | IO3 | INA226 ALERT | 内部上拉；低电平过流告警，记录本地日志 |
 | IO4 | I²C SDA | 与下列传感器及 OLED 共用总线 |
 | IO5 | I²C SCL | 与下列传感器及 OLED 共用总线 |
@@ -21,7 +21,7 @@
 | IO8 | 状态 LED | 高电平点亮；ECO模式熄灭，PWR模式连接 WiFi 时常亮 |
 | IO9 | 按键 | 内部上拉，按键另一端接 GND，低电平按下 |
 | IO18 / IO19 | 内置 USB Serial/JTAG | D− / D+，下载与日志调试 |
-| UART0 | 雷达串口预留 | 系统控制台不使用 UART0；当前雷达逻辑读取 OUT 引脚 |
+| UART0 | 雷达 AT 配置 | TX=IO21、RX=IO20，默认 115200 8N1；检测控制仍读取 OUT |
 
 IO9 同时是 BOOT 启动配置引脚，按住复位可能进入下载模式。
 
@@ -346,3 +346,51 @@ TVOC 仍放不下时以整数 k ppb 简写，保留下方两排统一字号。
 采样按周期等待，OLED 仅在画面变化时传输。WiFi/HTTP 与环境任务使用模式通知，
 NVS 写入不持有 PWM 读锁；采样和输出控制优先于显示/OTA。告警日志使用最近
 采样缓存。检查结论、回归测试及上板验收见 [性能检查记录](docs/performance-review.md)。
+
+## 雷达 AT 参数配置（USRR235L）
+
+按本地 `uart-at-debug/usrr235.py` 的协议实现。UART0 默认 ESP TX=IO21 → 雷达 RX、ESP RX=IO20 ← 雷达 TX，共地、3.3V TTL、115200 8N1、无流控。可在 `main/config.h` 中用 `CFG_RADAR_UART_TX_PIN`、`CFG_RADAR_UART_RX_PIN`、`CFG_RADAR_UART_BAUD` 覆盖。系统日志继续使用 USB Serial/JTAG。
+
+PWR 下打开设备首页，在“雷达参数”中选择参数、输入数值，点击“写入并重启雷达”。显示的是待写入值，**不是当前参数读数**。支持 BAUD、GPIO、TAGOUT、HOLD、R1/R2/R3、MR1TH/MR2TH/MR3TH、R1TH/R2TH/R3TH、TRITH、ONTH、OUTTRI、FREQ、FTIME、STIME；范围与调试工具一致。GPIO 极性会影响现有 OUT 高电平有人逻辑，应按接线选择。
+
+```sh
+# 提交单参数配置；202 表示已接收，不代表已写入成功
+curl -X POST 'http://power.local/api/v1/radar?parameter=HOLD&value=40'
+# 查询参数列表、当前串口波特率及最近任务结果
+curl 'http://power.local/api/v1/radar'
+```
+
+将地址替换为实际设备地址。GET 返回 `status`、`baud`、`parameters` 和 `job`；任务有 `id`、`busy`、`phase`（idle/working/done/error）、`parameter`、`value`、`written`、`restarted`、`error`。POST 参数必须是白名单中的大写名称与合法非负整数；非法值返回 400，已有任务或非 PWR 返回 409。刷新网页后也能继续查看最近任务。ECO 下 HTTP 关闭；已接收的串口任务继续完成。
+
+独立低优先级任务发送七个空格和 CRLF，进入 STOP 并用 AT 验证；写入等待 OK/AT+OK，忽略命令回显及检测数据。距离参数先查询并验证 R1 ≤ R2 ≤ R3。最后发送 AT+RESET，并等待参数输出或检测数据。失败也尝试重启，界面分别显示写入确认和重启确认，超时不自动重复写入。配置期间雷达暂停检测，NMOS 仍按现有 OUT 信号和控制模式工作。
+
+BAUD 使用序号 1..8，映射见网页；成功确认写入后 ESP 保存新波特率到 NVS，并在 RESET 发送完成后切换 UART 波特率。初次通信失败时尝试工具支持的八种速率恢复，最坏可能需要约一分钟。若模块立即改变波特率导致写入确认丢失，任务会报超时；下一次操作会重新探测，不能将超时视为未写入。NVS 保存失败会单独报错。雷达参数本身由模块保存。
+
+当前协议流程已通过模拟串口测试和 ESP-IDF 编译；真实模块的 STOP、BAUD 生效时序和重启输出仍需上板验证。
+
+```sh
+python3 -m unittest discover -s tests -v
+node tests/test_radar_web.cjs
+```
+
+### 查询全部雷达参数
+
+网页点击“查询全部参数”，弹窗显示本次读取的当前值、查询失败项，以及仅支持设置的项目。支持查询 BAUD、GPIO、TAGOUT、HOLD、R1/R2/R3、MR1TH/MR2TH/MR3TH、R1TH/R2TH/R3TH、TRITH、ONTH。OUTTRI、FREQ、FTIME、STIME 在工具协议中没有查询指令，显示“仅支持设置”，不会将待写入值当成实际值。
+
+`POST /api/v1/radar/query` 异步启动查询（202），随后轮询 `GET /api/v1/radar`。`job.operation` 为 `query`，`job.resumed` 表示是否确认恢复检测；参数列表增加 `queryable`、`value`（未读或失败为 null）和 `query_status`（pending/ok/error/unsupported）。每次重新查询都清除上次结果。查询和写入共用串口任务，忙时返回 409。
+
+查询进入 STOP 后逐项读取，个别失败继续读取其他项目，最后使用 AT+START 恢复检测，无需常规重启；START 失败时尝试 RESET 恢复。查询期间检测暂停；最坏等待时间取决于串口探测和各项超时。关闭弹窗不取消正在执行的任务。
+
+### 雷达输出监视器
+
+网页“输出监视器”打开实时输出弹窗，持续显示 UART0 收到的原始字节（保留大小写、空格和换行；其他不可显示字节显示为 `\xNN`）。支持切换自动滚动和清空窗口；关闭弹窗后停止网页轮询。打开监视器不发送任何指令，不改变雷达状态或 TAGOUT。TAGOUT=0 时可能没有检测输出；执行参数查询或写入时，也会看到模块回应。
+
+`GET /api/v1/radar/output` 首次读取最近最多 512 字节；随后请求 `?after=<next>` 获取后续字节。返回 `hex`（原始字节十六进制）、`next`（字符串游标）、`dropped`（被覆盖字节数的字符串）、`reset`（设备重启等导致游标重置）、`more`。各浏览器使用独立游标，不会互相消费数据。固件保存最近 4096 字节，网页保留最近 32 KiB 文本；数据过快或断连太久会发生覆盖并提示，监视器不保证无损录制。接收与配置操作共用同一串口任务，不会争抢回应。ECO 时 HTTP 关闭，网页提示断连并自动重试。
+
+### 网页环境读数
+
+首页每秒读取 `/api/v1/sensor`，显示 SHT40 实际温湿度、AHT21 校准温湿度（供 ENS160 补偿）、ENS160 估算 CO₂、TVOC 和 AQI 等级。温湿度显示一位小数，空气质量显示整数。Startup/Warmup 时 CO₂ 数值加删除线并提示未稳定；数据获取失败时清空读数并自动重试。页面隐藏时暂停环境数据轮询。
+
+### 固件版本
+
+`GET /api/v1/version` 返回当前运行固件的 `status`、`version`、`idf_version`、`build_date`、`build_time` 和 `elf_sha256`。例如：`curl http://power.local/api/v1/version`，地址按实际设备替换。网页底部显示版本及 ELF SHA256 前 8 位，用于区分版本号相同的不同构建；完整构建信息可通过接口获取。网页每 30 秒刷新版本，点击“重新同步”也会刷新。与其他 HTTP API 一样仅 PWR 下可用。

@@ -24,6 +24,10 @@ h1{font-size:32px;font-weight:600;letter-spacing:-.04em;margin:0 0 10px}.intro{c
 .slider:disabled{opacity:.4;cursor:wait}.labels{display:flex;justify-content:space-between;font-size:16px;color:var(--muted)}.labels span.active{color:var(--accent);font-weight:600}
 .detail{min-height:48px;margin:24px 0 0;line-height:1.6;font-size:14px;color:var(--detail)}.status{min-height:42px;font-size:13px;line-height:1.5;color:var(--muted);margin:18px 0}.status.error{color:var(--error)}
 button{min-height:44px;border:1px solid var(--border);background:transparent;color:var(--detail);border-radius:10px;padding:10px 18px;font:inherit;font-size:14px;cursor:pointer}button:disabled{opacity:.4}
+select,input[type=number]{width:100%;min-height:48px;margin:10px 0 16px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);font:inherit}
+dialog{width:min(94vw,560px);max-height:85vh;overflow:auto;border:1px solid var(--border);border-radius:18px;background:var(--card);color:var(--text);padding:24px}dialog::backdrop{background:#0008}dialog h2{margin:0}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px 6px;border-bottom:1px solid var(--border)}td:last-child{text-align:right} .radar-actions{display:flex;gap:10px;flex-wrap:wrap}
+#radar-stream{height:45vh;min-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;font:13px/1.6 ui-monospace,monospace}#radar-monitor-dialog{width:min(94vw,720px)}
+h2.section-title{font-size:18px;margin:0 0 18px}.sensor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px}.sensor-grid.air{grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--border);padding-top:18px;margin-top:20px}.sensor-label{font-size:12px;color:var(--muted);line-height:1.6}.sensor-value{font-size:clamp(21px,6vw,28px);font-weight:600;color:var(--accent);font-variant-numeric:tabular-nums;margin-top:4px;overflow-wrap:anywhere}.sensor-value small{font-size:12px;font-weight:400;color:var(--muted)}#sensor-co2.unsettled{text-decoration:line-through}
 footer{font-size:12px;color:var(--footer);margin-top:24px;line-height:1.6}
 @media(max-width:420px){body{padding:20px}.card{padding:24px}header{margin-bottom:28px}}
 </style>
@@ -32,6 +36,22 @@ footer{font-size:12px;color:var(--footer);margin-top:24px;line-height:1.6}
 <main class="panel">
 <header><span class="brand">5V CONTROLLER</span><span id="power" class="badge">连接中</span></header>
 <h1>输出控制</h1><p class="intro">选择控制模式，设备立即应用。</p>
+<section class="card" aria-labelledby="sensor-title">
+<h2 id="sensor-title" class="section-title">环境读数</h2>
+<div class="sensor-grid">
+<div><div class="sensor-label">实际温度 · SHT40</div><div class="sensor-value"><span id="sensor-temperature">--</span> <small>°C</small></div></div>
+<div><div class="sensor-label">实际湿度 · SHT40</div><div class="sensor-value"><span id="sensor-humidity">--</span> <small>%RH</small></div></div>
+<div><div class="sensor-label">校准温度 · AHT21</div><div class="sensor-value"><span id="sensor-comp-temperature">--</span> <small>°C</small></div></div>
+<div><div class="sensor-label">校准湿度 · AHT21</div><div class="sensor-value"><span id="sensor-comp-humidity">--</span> <small>%RH</small></div></div>
+</div>
+<div class="sensor-grid air">
+<div><div class="sensor-label">CO₂（估算）</div><div class="sensor-value"><span id="sensor-co2">--</span> <small>ppm</small></div></div>
+<div><div class="sensor-label">TVOC</div><div class="sensor-value"><span id="sensor-tvoc">--</span> <small>ppb</small></div></div>
+<div><div class="sensor-label">AQI 等级</div><div id="sensor-aqi" class="sensor-value">--</div></div>
+</div>
+<p class="pwm-note">校准温湿度为 AHT21 提供给 ENS160 的补偿读数。</p>
+<p id="sensor-status" class="pwm-note" role="status" aria-live="polite">正在读取环境数据…</p>
+</section>
 <section class="card" aria-label="控制模式">
 <div class="row"><span class="caption">当前模式</span><output id="mode" class="mode" for="slider">--</output></div>
 <input id="slider" class="slider" type="range" min="0" max="3" step="1" value="0" aria-label="选择 RA、BL、ON 或 OFF 模式" disabled>
@@ -48,10 +68,32 @@ footer{font-size:12px;color:var(--footer);margin-top:24px;line-height:1.6}
 <button id="save" type="button" disabled>保存占空比</button>
 <p class="pwm-note">点击保存后应用并写入设备，重启后保留。</p>
 </section>
+<section class="card" aria-label="雷达参数">
+<div class="row"><span>雷达参数</span><span id="radar-baud" class="caption">UART0</span></div>
+<p class="pwm-note">选择一个参数并设置数值，写入后自动重启雷达。配置期间雷达会暂停检测。</p>
+<label for="radar-parameter">参数</label><select id="radar-parameter" disabled></select>
+<p id="radar-help" class="pwm-note">正在读取参数列表…</p>
+<label for="radar-value">数值</label><input id="radar-value" type="number" required step="1" inputmode="numeric" disabled>
+<div class="radar-actions"><button id="radar-apply" type="button" disabled>写入并重启雷达</button><button id="radar-query" type="button" disabled>查询全部参数</button><button id="radar-monitor" type="button">输出监视器</button></div>
+<p id="radar-status" class="status" role="status" aria-live="polite">尚未操作</p>
+</section>
 <p id="status" class="status" role="status" aria-live="polite">连接设备中…</p>
 <button id="refresh" type="button">重新同步</button>
-<footer>仅 PWR 下可访问。电源模式切换后控制模式自动回到 RA。</footer>
+<footer>仅 PWR 下可访问。电源模式切换后控制模式自动回到 RA。<br><span id="firmware-version">固件版本：读取中…</span></footer>
 </main>
+<dialog id="radar-monitor-dialog" aria-labelledby="radar-monitor-title">
+<div class="row"><h2 id="radar-monitor-title">雷达输出监视器</h2><button id="radar-monitor-close" type="button">关闭</button></div>
+<p class="pwm-note">被动接收 UART0 原始输出，不改变模块状态。参数操作期间也显示模块响应；TAGOUT=0 时可能没有检测输出。</p>
+<div class="radar-actions"><button id="radar-scroll" type="button" aria-pressed="true">自动滚动：开</button><button id="radar-clear" type="button">清空</button></div>
+<pre id="radar-stream" tabindex="0" aria-label="模块实时输出"></pre>
+<p id="radar-monitor-status" class="pwm-note" role="status" aria-live="polite">连接中…</p>
+</dialog>
+<dialog id="radar-dialog" aria-labelledby="radar-dialog-title">
+<div class="row"><h2 id="radar-dialog-title">当前雷达参数</h2><button id="radar-close" type="button" aria-label="关闭参数弹窗">关闭</button></div>
+<p id="radar-query-status" class="pwm-note" role="status" aria-live="polite">正在查询…</p>
+<table><thead><tr><th scope="col">参数</th><th scope="col">当前值</th></tr></thead><tbody id="radar-values"></tbody></table>
+<p class="pwm-note">查询会短暂停止检测，完成后自动恢复。仅支持设置的参数无法读取当前值。</p>
+</dialog>
 <script>
  'use strict';
 const modes=['RA','BL','ON','OFF'];
@@ -73,8 +115,37 @@ slider.addEventListener('input',()=>{show(modes[Number(slider.value)]);message('
 slider.addEventListener('change',async()=>{dragging=false;if(busy){if(confirmed)show(confirmed);return;}const desired=modes[Number(slider.value)];if(desired===confirmed){message('模式未改变');return;}busy=true;controls();message('正在应用 '+desired+'…');try{const data=await request('/api/v1/control?mode='+encodeURIComponent(desired),{method:'POST'});confirmed=validateMode(data);show(confirmed);message('已切换到 '+confirmed);}catch(error){if(confirmed)show(confirmed);connected=false;power.textContent='待同步';message('切换结果未确认，请重新同步后再操作。',true);}finally{busy=false;controls();}});
 for(const input of [duty1,duty2]){input.addEventListener('input',()=>{dirty=true;percentages();controls();message('占空比尚未保存');});input.addEventListener('change',()=>{dragging=false;});}
 save.addEventListener('click',async()=>{if(busy||!connected||!dirty)return;busy=true;controls();message('正在保存占空比…');try{const data=await request('/api/v1/pwm?ctl1='+encodeURIComponent(duty1.value)+'&ctl2='+encodeURIComponent(duty2.value),{method:'POST'});showDuties(data);dirty=false;message('占空比已保存，重启后保留');}catch(error){message(error.message==='pwm_save_failed'?'设备保存失败，设置未应用，请重试。':'保存结果未确认，请重新同步设备状态。',true);connected=false;power.textContent='待同步';}finally{busy=false;controls();}});
-refresh.addEventListener('click',()=>{dirty=false;return sync();});
-sync();setInterval(sync,5000);
+refresh.addEventListener('click',()=>{dirty=false;return Promise.all([sync(),versionSync()]);});
+let versionPolling=false;
+async function versionSync(){if(versionPolling)return;versionPolling=true;const label=$('firmware-version');try{const data=await request('/api/v1/version');if(typeof data.version!=='string'||typeof data.elf_sha256!=='string'||!/^[0-9a-f]{64}$/.test(data.elf_sha256))throw Error('invalid_version');label.textContent='固件版本：'+data.version+' · '+data.elf_sha256.slice(0,8);label.title='构建：'+data.build_date+' '+data.build_time+' · ESP-IDF '+data.idf_version+' · ELF SHA256 '+data.elf_sha256;}catch(error){label.textContent='固件版本：暂不可用';label.title='';}finally{versionPolling=false;}}
+const sensorFields={'sensor-temperature':['temperature_c',1],'sensor-humidity':['humidity_rh_pct',1],'sensor-comp-temperature':['compensation_temperature_c',1],'sensor-comp-humidity':['compensation_humidity_rh_pct',1],'sensor-co2':['eco2_ppm',0],'sensor-tvoc':['tvoc_ppb',0],'sensor-aqi':['aqi',0]};
+let sensorPolling=false;
+function sensorRender(data){const reading=data?.reading;if(!reading||Object.values(sensorFields).some(([key])=>typeof reading[key]!=='number'||!Number.isFinite(reading[key])))throw Error('invalid_sensor');for(const [id,[key,decimals]] of Object.entries(sensorFields))$(id).textContent=reading[key].toFixed(decimals);const unsettled=reading.validity==='startup'||reading.validity==='warmup';$('sensor-co2').classList.toggle('unsettled',unsettled);const validity={normal:'正常',startup:'启动中，空气质量读数尚未稳定',warmup:'预热中，空气质量读数尚未稳定',invalid:'空气质量读数无效'};let stamp='';if(Number.isFinite(data.last_updated_unix_ms)&&data.last_updated_unix_ms>0)stamp=' · 采样于 '+new Date(data.last_updated_unix_ms).toLocaleTimeString();$('sensor-status').textContent=(validity[reading.validity]||'空气质量状态未知')+stamp;$('sensor-status').classList.toggle('error',reading.validity==='invalid');}
+async function sensorSync(){if(sensorPolling||document.hidden)return;sensorPolling=true;try{sensorRender(await request('/api/v1/sensor'));}catch(error){for(const id of Object.keys(sensorFields))$(id).textContent='--';$('sensor-co2').classList.toggle('unsettled',false);$('sensor-status').textContent='环境数据暂不可用，正在重试。';$('sensor-status').classList.add('error');}finally{sensorPolling=false;}}
+const radarParameter=$('radar-parameter'),radarValue=$('radar-value'),radarApply=$('radar-apply'),radarStatus=$('radar-status'),radarQuery=$('radar-query'),radarDialog=$('radar-dialog');
+let radarParams=[],radarBusy=false,radarSending=false,radarPolling=false,radarReady=false;
+const radarErrors={stop_failed:'无法进入配置模式，请检查接线和波特率',range_query_failed:'距离边界读取失败',invalid_distance_order:'距离必须满足 R1 ≤ R2 ≤ R3，未写入参数',write_timeout:'未收到写入确认，参数可能已写入',write_rejected:'模块拒绝写入',baud_save_failed:'雷达波特率已写入，但 ESP 保存失败，请勿断电并重新设置 BAUD',restart_unconfirmed:'已发送重启，但未确认雷达恢复运行',query_failed:'部分参数查询失败',resume_failed:'查询完成，但未确认雷达恢复检测'};
+function radarControls(){const disabled=!radarReady||radarBusy||radarSending;radarQuery.disabled=radarParameter.disabled=radarValue.disabled=radarApply.disabled=disabled;}
+function radarHelp(){const p=radarParams.find(p=>p.name===radarParameter.value);if(!p)return;radarValue.min=p.min;radarValue.max=p.max;radarValue.value=p.min;$('radar-help').textContent=p.description+'。范围：'+p.min+'–'+p.max+'。这里显示的是待写入值，不是当前参数。';}
+function radarRender(data){radarReady=true;radarBusy=data.job.busy;$('radar-baud').textContent=data.baud+' baud';if(!radarParams.length){radarParams=data.parameters;for(const p of radarParams){const option=document.createElement('option');option.value=p.name;option.textContent=p.name;radarParameter.append(option);}radarParameter.value='HOLD';radarHelp();}const job=data.job;if(job.operation==='query'){radarQueryRender(data);radarStatus.textContent=job.busy?'正在查询全部参数，请稍候…':job.phase==='done'?'参数查询完成，雷达已恢复检测':(radarErrors[job.error]||job.error)+'。'+(job.resumed?'雷达已恢复检测。':'雷达恢复未确认。');radarStatus.classList.toggle('error',job.phase==='error');radarControls();return;}radarStatus.classList.toggle('error',job.phase==='error');if(job.busy)radarStatus.textContent='正在写入 '+job.parameter+'='+job.value+' 并重启，请稍候…';else if(job.phase==='done')radarStatus.textContent=job.parameter+'='+job.value+' 已写入，雷达已重启';else if(job.phase==='error')radarStatus.textContent=(radarErrors[job.error]||job.error)+'。'+(job.restarted?'已确认雷达重启。':'雷达重启未确认，请检查设备。');radarControls();}
+async function radarSync(){if(radarPolling||radarSending)return;radarPolling=true;try{radarRender(await request('/api/v1/radar'));}catch(error){radarReady=false;radarStatus.textContent='无法获取雷达状态，请恢复 PWR 连接后重试。';if(radarDialog.open)$('radar-query-status').textContent='连接中断，查询结果暂未确认。恢复 PWR 连接后会继续同步。';radarStatus.classList.add('error');radarControls();}finally{radarPolling=false;}}
+function radarQueryRender(data){const job=data.job;const rows=$('radar-values');rows.replaceChildren();for(const p of data.parameters){const row=document.createElement('tr'),name=document.createElement('td'),value=document.createElement('td');name.textContent=p.name;value.textContent=p.queryable===false?'仅支持设置':p.query_status==='ok'?String(p.value):p.query_status==='error'?'查询失败':job.busy?'查询中…':'未读取';row.append(name,value);rows.append(row);}$('radar-query-status').textContent=job.busy?'正在读取全部可查询参数，请稍候…':job.phase==='done'?'当前参数已读取，雷达已恢复检测。':(radarErrors[job.error]||job.error)+'。'+(job.resumed?'雷达已恢复检测。':'雷达恢复未确认。');}
+$('radar-close').addEventListener('click',()=>radarDialog.close());
+radarQuery.addEventListener('click',async()=>{if(radarSending||radarBusy||!radarReady)return;radarSending=true;radarControls();$('radar-values').replaceChildren();$('radar-query-status').textContent='正在提交查询…';radarDialog.showModal();try{radarRender(await request('/api/v1/radar/query',{method:'POST'}));}catch(error){radarReady=false;$('radar-query-status').textContent=error.message==='radar_busy'?'雷达正忙，请等待当前任务完成后重试。':'查询提交结果未确认，正在尝试重新同步。';}finally{radarSending=false;radarControls();radarSync();}});
+radarParameter.addEventListener('change',radarHelp);
+radarApply.addEventListener('click',async()=>{if(radarSending||radarBusy||!radarReady||!radarValue.reportValidity())return;const value=Number(radarValue.value);if(!Number.isInteger(value))return;radarSending=true;radarControls();radarStatus.textContent='正在提交…';try{radarRender(await request('/api/v1/radar?parameter='+encodeURIComponent(radarParameter.value)+'&value='+encodeURIComponent(value),{method:'POST'}));}catch(error){radarReady=false;radarStatus.textContent=error.message==='radar_busy'?'已有雷达配置任务，正在等待同步。':'提交结果未确认，正在重新读取状态，请勿重复写入。';radarStatus.classList.add('error');}finally{radarSending=false;radarControls();radarSync();}});
+const monitorDialog=$('radar-monitor-dialog'),monitorStream=$('radar-stream'),monitorStatus=$('radar-monitor-status');
+let monitorGeneration=0,monitorCursor=null,monitorScroll=true;
+function monitorAppend(text){monitorStream.textContent=(monitorStream.textContent+text).slice(-32768);if(monitorScroll)monitorStream.scrollTop=monitorStream.scrollHeight;}
+async function monitorPoll(generation){if(!monitorDialog.open||generation!==monitorGeneration)return;let delay=250;try{const data=await request('/api/v1/radar/output'+(monitorCursor===null?'':'?after='+encodeURIComponent(monitorCursor)));if(!monitorDialog.open||generation!==monitorGeneration)return;if(typeof data.next!=='string'||!/^[0-9]+$/.test(data.next)||typeof data.hex!=='string'||! /^(?:[0-9a-f]{2})*$/.test(data.hex))throw Error('invalid_output');monitorCursor=data.next;if(data.reset)monitorAppend('\n[设备输出游标已重置]\n');if(data.dropped!=='0')monitorAppend('\n[缓冲区已覆盖 '+data.dropped+' 字节]\n');let text='';for(let i=0;i<data.hex.length;i+=2){const code=parseInt(data.hex.slice(i,i+2),16);text+=(code===9||code===10||code===13||code>=32&&code<=126)?String.fromCharCode(code):'\\x'+code.toString(16).padStart(2,'0');}monitorAppend(text);monitorStatus.textContent='实时接收中 · 窗口保留最近 32 KiB 文本';if(data.more)delay=50;}catch(error){if(generation===monitorGeneration){monitorStatus.textContent='连接中断，正在重试；请确认设备处于 PWR 模式。';delay=1500;}}if(monitorDialog.open&&generation===monitorGeneration)setTimeout(()=>monitorPoll(generation),delay);}
+$('radar-monitor').addEventListener('click',()=>{monitorCursor=null;monitorStream.textContent='';monitorStatus.textContent='连接中…';monitorDialog.showModal();monitorPoll(++monitorGeneration);});
+$('radar-monitor-close').addEventListener('click',()=>{monitorDialog.close();++monitorGeneration;});
+monitorDialog.addEventListener('close',()=>{++monitorGeneration;});
+$('radar-clear').addEventListener('click',()=>{monitorStream.textContent='';});
+$('radar-scroll').addEventListener('click',()=>{monitorScroll=!monitorScroll;$('radar-scroll').textContent='自动滚动：'+(monitorScroll?'开':'关');$('radar-scroll').setAttribute('aria-pressed',String(monitorScroll));if(monitorScroll)monitorStream.scrollTop=monitorStream.scrollHeight;});
+versionSync();setInterval(versionSync,30000);
+sensorSync();setInterval(sensorSync,1000);
+sync();setInterval(sync,5000);radarSync();setInterval(radarSync,1500);
 </script>
 </body>
 </html>

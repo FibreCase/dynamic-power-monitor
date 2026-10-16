@@ -12,7 +12,7 @@ This README describes the current `5v` branch. The build project name remains `e
 
 | Pin | Connection | Behavior |
 |---|---|---|
-| IO0 | HLK-LD2410C-P OUT | Internal pull-down; HIGH occupied, LOW empty |
+| IO0 | Radar OUT | Internal pull-down; HIGH occupied, LOW empty |
 | IO3 | INA226 ALERT | Internal pull-up; active LOW, local overcurrent log |
 | IO4 / IO5 | I²C SDA / SCL | Shared sensor/display bus |
 | IO6 | NMOS CTL2 | 20kHz PWM, off 0%, adjustable on duty |
@@ -20,7 +20,7 @@ This README describes the current `5v` branch. The build project name remains `e
 | IO8 | Status LED | Active HIGH; off in ECO, on with WiFi in PWR |
 | IO9 | Button | Internal pull-up; connect button to GND, active LOW |
 | IO18 / IO19 | Native USB Serial/JTAG | D− / D+, flashing and logs |
-| UART0 | Reserved radar serial port | Not used by the system console; current radar logic uses OUT |
+| UART0 | Radar AT configuration | TX=IO21, RX=IO20, default 115200 8N1; presence control still uses OUT |
 
 IO9 is also the BOOT strapping pin. Holding it during reset may enter download mode.
 
@@ -352,3 +352,45 @@ Sampling uses deadline waits; OLED transfers only changed frames. Network and
 environment workers use mode notifications, and NVS commits do not hold the
 PWM snapshot lock. Sampling/control run ahead of display/OTA. Alert logs use
 the latest cached sample. See the [review and hardware validation plan](docs/performance-review.md).
+
+## Radar AT configuration (USRR235L)
+
+Implements the local `uart-at-debug/usrr235.py` protocol. UART0 defaults to ESP TX=GPIO21 → radar RX and ESP RX=GPIO20 ← radar TX, common ground, 3.3V TTL, 115200 8N1, no flow control. Override `CFG_RADAR_UART_TX_PIN`, `CFG_RADAR_UART_RX_PIN`, and `CFG_RADAR_UART_BAUD` in `main/config.h`. Logging remains on USB Serial/JTAG.
+
+In PWR, open the device homepage, choose a radar parameter, enter a value and press **write and restart**. The input is a proposed value, not a current parameter reading. Supported parameters and ranges match the debug tool, including BAUD, GPIO, TAGOUT, HOLD, R1–R3, MR1TH–MR3TH, R1TH–R3TH, TRITH, ONTH, OUTTRI, FREQ, FTIME and STIME. Changing GPIO polarity affects the existing active-high presence logic.
+
+- `POST /api/v1/radar?parameter=HOLD&value=40`: enqueue one setting and restart; 202 means accepted, not completed. Invalid parameters return 400; busy/non-PWR returns 409.
+- `GET /api/v1/radar`: parameter metadata, UART `baud`, and latest `job` with `id`, `busy`, `phase` (idle/working/done/error), `parameter`, `value`, `written`, `restarted`, and `error`. Refreshing the page retains visibility of the latest job. Accepted work finishes even if the device enters ECO and HTTP stops.
+
+A dedicated low-priority task sends seven spaces plus CRLF, verifies STOP with AT, validates distance ordering via queries, writes the setting and sends AT+RESET. It filters unsolicited reports and command echoes while waiting for ACKs. Failed operations also attempt a restart. Timeouts may mean the write happened without an ACK; writes are never automatically repeated. During configuration, detection pauses and NMOS control continues using the existing OUT pin and selected mode.
+
+BAUD uses indices 1–8 as shown on the page. After an acknowledged write, ESP saves the new baud in NVS and switches UART after RESET transmission. Failed initial communication probes all eight supported speeds (up to roughly one minute). Immediate module baud changes can lose the ACK: the job reports a timeout, and the next operation probes again. NVS errors are reported separately. Radar settings are stored by the module itself.
+
+Protocol simulation and ESP-IDF compilation are checked; STOP behavior, baud-change timing and boot output still require physical hardware verification. See [Chinese API details](README_zh.md#雷达-at-参数配置usrr235l).
+
+```sh
+python3 -m unittest discover -s tests -v
+node tests/test_radar_web.cjs
+```
+
+### Query all radar parameters
+
+Press **query all parameters** to open a dialog with current readings, individual failures and unsupported queries. The 15 queryable parameters match the debug tool. OUTTRI, FREQ, FTIME and STIME are labeled write-only; proposed values are never presented as readings.
+
+`POST /api/v1/radar/query` queues the read operation (202); poll `GET /api/v1/radar` for `job.operation=query`, `job.resumed` and parameter `queryable`, `value` (null when unavailable), `query_status` (pending/ok/error/unsupported). Each new query clears previous results. Query and write jobs share one UART worker; busy requests return 409.
+
+After STOP, each parameter is read even if another fails. AT+START resumes detection; RESET is a fallback if START fails. Detection pauses during the query. Closing the dialog does not cancel the task.
+
+### Radar output monitor
+
+Open **output monitor** for live UART0 output, with auto-scroll and clear controls. Closing the dialog stops browser polling. Monitoring is passive: it sends no radar commands and does not change TAGOUT. With TAGOUT=0, there may be no detection reports. Replies during parameter operations are also captured. Case, spaces and line endings are preserved; other non-printable bytes appear as `\xNN`.
+
+`GET /api/v1/radar/output` returns up to 512 recent bytes; use `?after=<next>` for subsequent bytes. Fields: `hex` (raw bytes), `next` (string cursor), `dropped` (string count), `reset` (cursor reset), `more`. Clients have independent cursors. Firmware retains 4096 bytes; the browser retains 32 KiB of text. Overwritten data is reported; this is not a lossless recorder. A single UART task captures both idle output and command replies. In ECO, HTTP stops and the monitor retries automatically.
+
+### Web environmental readings
+
+The homepage polls `/api/v1/sensor` once per second for SHT40 ambient temperature/humidity, AHT21 compensation temperature/humidity, and ENS160 estimated CO₂, TVOC and AQI. Temperature/humidity use one decimal place. Startup/warmup readings display CO₂ with a strike-through and a status message. Failed requests clear readings and retry; polling pauses while the page is hidden.
+
+### Firmware version
+
+`GET /api/v1/version` reports the running firmware: `status`, `version`, `idf_version`, `build_date`, `build_time`, and `elf_sha256`. The page footer shows the version and first eight ELF SHA256 characters to distinguish builds with identical version strings. Version refresh runs every 30 seconds and on manual synchronization. Available in PWR, like the other HTTP APIs.

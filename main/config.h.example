@@ -77,7 +77,7 @@
 #define CFG_NMOS_CTL2_PIN GPIO_NUM_6
 #define CFG_NMOS_CTL1_PIN GPIO_NUM_7
 
-// HLK-LD2410C-P OUT: HIGH = occupied, LOW = empty.
+// Radar OUT: HIGH = occupied, LOW = empty.
 #define CFG_RADAR_OUT_PIN GPIO_NUM_0
 
 // Environmental sensors on the shared I2C bus.
@@ -103,3 +103,8 @@
 #define CFG_NMOS_PWM_FREQ_HZ 20000u
 #define CFG_CTL1_PWM_DUTY_PCT 100u
 #define CFG_CTL2_PWM_DUTY_PCT 100u
+
+// USRR235L UART0: ESP TX -> radar RX, ESP RX <- radar TX; 3.3V TTL.
+#define CFG_RADAR_UART_TX_PIN GPIO_NUM_21
+#define CFG_RADAR_UART_RX_PIN GPIO_NUM_20
+#define CFG_RADAR_UART_BAUD 115200u // Initial baud; web BAUD changes saved in NVS.

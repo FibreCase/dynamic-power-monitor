@@ -7,8 +7,10 @@
 #include "core.h"
 #include "status.h"
 #include "pwm_settings.h"
+#include "radar_at.h"
 #include "config.h"
 #include "esp_log.h"
+#include "esp_app_desc.h"
 #include "freertos/task.h"
 #include "esp_http_server.h"
 #include "ota_update.h"
@@ -78,6 +80,35 @@ static esp_err_t update_handler(httpd_req_t *req) {
 invalid_url:
   httpd_resp_set_status(req, "400 Bad Request");
   return httpd_resp_sendstr(req, "{\"error\":\"invalid_ota_url\"}");
+}
+
+/* Application version strings may contain JSON quotes or control bytes. */
+static void version_json_escape(const char *src, size_t length, char *dst) {
+  static const char hex[]="0123456789abcdef";
+  for (size_t i=0;i<length && src[i];i++) {
+    unsigned char c=(unsigned char)src[i];
+    if (c=='"' || c=='\\') {*dst++='\\';*dst++=(char)c;}
+    else if (c<32) {
+      memcpy(dst,"\\u00",4);dst+=4;*dst++=hex[c>>4];*dst++=hex[c&15];
+    } else *dst++=(char)c;
+  }
+  *dst=0;
+}
+
+static esp_err_t version_handler(httpd_req_t *req) {
+  const esp_app_desc_t *app=esp_app_get_description();
+  char version[sizeof(app->version)*6+1],idf[sizeof(app->idf_ver)*6+1];
+  char sha[65],body[896];
+  version_json_escape(app->version,sizeof(app->version),version);
+  version_json_escape(app->idf_ver,sizeof(app->idf_ver),idf);
+  for (size_t i=0;i<sizeof(app->app_elf_sha256);i++)
+    snprintf(sha+i*2,3,"%02x",app->app_elf_sha256[i]);
+  snprintf(body,sizeof(body),"{\"status\":\"ok\",\"version\":\"%s\",\"idf_version\":\"%s\","
+           "\"build_date\":\"%s\",\"build_time\":\"%s\",\"elf_sha256\":\"%s\"}",
+           version,idf,app->date,app->time,sha);
+  httpd_resp_set_type(req,"application/json");
+  httpd_resp_set_hdr(req,"Cache-Control","no-store");
+  return httpd_resp_sendstr(req,body);
 }
 
 static esp_err_t sensor_handler(httpd_req_t *req) {
@@ -241,11 +272,113 @@ pwr_required:
   return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwr_required\"}");
 }
 
+static esp_err_t radar_output_handler(httpd_req_t *req) {
+  httpd_resp_set_type(req,"application/json");
+  httpd_resp_set_hdr(req,"Cache-Control","no-store");
+  char query[96], value[24];
+  uint64_t after=0;
+  bool latest=true;
+  size_t length=httpd_req_get_url_query_len(req);
+  if (length) {
+    if (length>=sizeof(query) || httpd_req_get_url_query_str(req,query,sizeof(query))!=ESP_OK ||
+        httpd_query_key_value(query,"after",value,sizeof(value))!=ESP_OK || !value[0]) goto invalid;
+    for (const char *p=value;*p;p++) {
+      if (*p<'0' || *p>'9' || after>(UINT64_MAX-(*p-'0'))/10) goto invalid;
+      after=after*10+(*p-'0');
+    }
+    latest=false;
+  }
+  uint8_t bytes[512];
+  char hex[1025],body[1280];
+  uint64_t next,dropped;
+  bool reset,more;
+  size_t count=radar_at_output(after,latest,bytes,sizeof(bytes),&next,&dropped,&reset,&more);
+  static const char digits[]="0123456789abcdef";
+  for (size_t i=0;i<count;i++) {hex[i*2]=digits[bytes[i]>>4];hex[i*2+1]=digits[bytes[i]&15];}
+  hex[count*2]=0;
+  snprintf(body,sizeof(body),"{\"status\":\"ok\",\"next\":\"%" PRIu64 "\",\"dropped\":\"%" PRIu64
+           "\",\"reset\":%s,\"more\":%s,\"hex\":\"%s\"}",next,dropped,
+           reset?"true":"false",more?"true":"false",hex);
+  return httpd_resp_sendstr(req,body);
+invalid:
+  httpd_resp_set_status(req,"400 Bad Request");
+  return httpd_resp_sendstr(req,"{\"status\":\"error\",\"error\":\"invalid_output_cursor\"}");
+}
+
+static esp_err_t radar_handler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  if (req->method == HTTP_POST) {
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool pwr = !s_power_saving && !s_boot_loading;
+    xSemaphoreGive(s_mutex);
+    if (!pwr) {
+      httpd_resp_set_status(req, "409 Conflict");
+      return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"pwr_required\"}");
+    }
+    esp_err_t err;
+    if (!strcmp(req->uri, "/api/v1/radar/query") ||
+        !strncmp(req->uri, "/api/v1/radar/query?", 20)) {
+      err = radar_at_query_all();
+    } else {
+      char query[128], parameter[16], value[16];
+      unsigned number = 0;
+      size_t length = httpd_req_get_url_query_len(req);
+      if (!length || length >= sizeof(query) ||
+          httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+          httpd_query_key_value(query, "parameter", parameter, sizeof(parameter)) != ESP_OK ||
+          httpd_query_key_value(query, "value", value, sizeof(value)) != ESP_OK ||
+          !decode_url(parameter) || !decode_url(value) || !value[0]) goto invalid;
+      for (const char *p = value; *p; ++p) {
+        if (*p < '0' || *p > '9' || number > 100000) goto invalid;
+        number = number * 10 + (*p - '0');
+      }
+      err = radar_at_submit(parameter, number);
+    }
+    if (err == ESP_ERR_INVALID_ARG) goto invalid;
+    if (err != ESP_OK) {
+      httpd_resp_set_status(req, "409 Conflict");
+      return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"radar_busy\"}");
+    }
+    httpd_resp_set_status(req, "202 Accepted");
+  }
+  struct radar_at_state state;
+  radar_at_get(&state);
+  char body[640];
+  snprintf(body, sizeof(body),
+           "{\"status\":\"ok\",\"job\":{\"id\":%u,\"busy\":%s,\"phase\":\"%s\","
+           "\"parameter\":\"%s\",\"value\":%u,\"written\":%s,\"restarted\":%s,"
+           "\"error\":%s%s%s,\"operation\":\"%s\",\"resumed\":%s},\"baud\":%u,\"parameters\":[",
+           state.id, state.busy ? "true" : "false", state.phase, state.parameter,
+           state.value, state.written ? "true" : "false", state.restarted ? "true" : "false",
+           state.error ? "\"" : "", state.error ? state.error : "null", state.error ? "\"" : "", state.query ? "query" : "write", state.resumed ? "true" : "false", state.baud);
+  esp_err_t err = httpd_resp_sendstr_chunk(req, body);
+  for (size_t i=0; err==ESP_OK && i<radar_parameter_count; ++i) {
+    const struct radar_parameter *p=&radar_parameters[i];
+    char value[24];
+    if (state.query && state.results[i]==1) snprintf(value,sizeof(value),"%u",state.values[i]);
+    else snprintf(value,sizeof(value),"null");
+    snprintf(body, sizeof(body), "%s{\"name\":\"%s\",\"min\":%u,\"max\":%u,\"description\":\"%s\","
+             "\"queryable\":%s,\"value\":%s,\"query_status\":\"%s\"}",
+             i ? "," : "", p->name, p->min, p->max, p->description,
+             p->queryable ? "true" : "false", value, !p->queryable ? "unsupported" :
+             state.query && state.results[i]==1 ? "ok" : state.query && state.results[i]==2 ? "error" : "pending");
+    err = httpd_resp_sendstr_chunk(req, body);
+  }
+  if (err==ESP_OK) err=httpd_resp_sendstr_chunk(req, "]}");
+  if (err==ESP_OK) err=httpd_resp_sendstr_chunk(req, NULL);
+  return err;
+invalid:
+  httpd_resp_set_status(req, "400 Bad Request");
+  return httpd_resp_sendstr(req, "{\"status\":\"error\",\"error\":\"invalid_radar_parameter\"}");
+}
+
 static esp_err_t http_server_start(void) {
   if (s_server)
     return ESP_OK;
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
+  config.max_uri_handlers = 12;
   config.task_priority = 2; /* never preempt sampling or GPIO/PWM control */
   config.stack_size = 6144; /* JSON/OTA handlers have ~1.5KB local buffers */
   config.max_open_sockets = 4;
@@ -293,6 +426,26 @@ static esp_err_t http_server_start(void) {
   if (err == ESP_OK) {
     const httpd_uri_t pwm_post = {.uri = "/api/v1/pwm", .method = HTTP_POST, .handler = pwm_handler};
     err = httpd_register_uri_handler(s_server, &pwm_post);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t radar_get = {.uri = "/api/v1/radar", .method = HTTP_GET, .handler = radar_handler};
+    err = httpd_register_uri_handler(s_server, &radar_get);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t radar_post = {.uri = "/api/v1/radar", .method = HTTP_POST, .handler = radar_handler};
+    err = httpd_register_uri_handler(s_server, &radar_post);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t radar_query = {.uri = "/api/v1/radar/query", .method = HTTP_POST, .handler = radar_handler};
+    err = httpd_register_uri_handler(s_server, &radar_query);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t radar_output = {.uri = "/api/v1/radar/output", .method = HTTP_GET, .handler = radar_output_handler};
+    err = httpd_register_uri_handler(s_server, &radar_output);
+  }
+  if (err == ESP_OK) {
+    const httpd_uri_t version = {.uri = "/api/v1/version", .method = HTTP_GET, .handler = version_handler};
+    err = httpd_register_uri_handler(s_server, &version);
   }
   if (err != ESP_OK) {
     httpd_stop(s_server);
