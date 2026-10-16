@@ -139,6 +139,8 @@ healthy boot. Keep the `.bin` well under one slot (~1.65 MB; the current build i
 
 ## Overcurrent (OCP) alerting
 
+The driver writes Alert Limit (`0x07`) using `threshold_a × shunt_ohm / 2.5µV`, then Mask/Enable (`0x06`) with `0x8000` for shunt over-limit, active-low, non-latched alerts. Invalid or out-of-range thresholds are rejected without touching registers; calibration and sampling configuration are preserved. Run driver regression checks with `python3 -m unittest discover -s tests -v`.
+
 Two independent detectors record overcurrent events to the backend, and both are
 viewable in the dashboard's **Alerts** tab:
 

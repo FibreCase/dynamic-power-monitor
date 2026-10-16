@@ -36,8 +36,8 @@ float ina226_get_power_mw(void);
 void ina226_set_average(uint8_t avg_code);
 
 /* Arm the shunt overcurrent comparator so ALERT asserts when the sampled
- * current exceeds `threshold_a` (amperes). Writes only MAR/MCP/LAR — it never
+ * current exceeds `threshold_a` (amperes). Writes Alert Limit (0x07) and Mask/Enable (0x06); it never
  * touches CAL/CONFIG, so the voltage/current/power reads are unaffected.
- * MCP enables the shunt comparator only (bus comparator masked), default
- * polarity (alert above threshold), non-latched (level) ALERT. */
+ * SOL enables shunt over-limit only, active-low and non-latched.
+ * The threshold uses the fixed 2.5 uV shunt-voltage LSB and calibrated shunt. */
 esp_err_t ina226_set_ocp_threshold(float threshold_a);

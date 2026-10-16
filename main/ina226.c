@@ -12,9 +12,9 @@ static const char *TAG = "INA226";
 #define REG_CURRENT  0x04
 #define REG_CAL      0x05
 #define REG_MASK     0x06
-#define REG_ALERT    0x08   /* MAR: shunt-voltage compare threshold */
-#define REG_LAR      0x09   /* Latch Alert Response */
-#define REG_MCP      0x0A   /* Mask / Clear / Polarity */
+#define REG_ALERT    0x07   /* Alert Limit */
+#define MASK_SOL     0x8000 /* Shunt Over-Limit, active-low, non-latched */
+#define SHUNT_LSB_V  2.5e-6f
 
 /* CONFIG bit fields. */
 #define CFG_RESET    0x8000
@@ -33,6 +33,7 @@ static const char *TAG = "INA226";
 #define CUR_FULLSCALE 32768.0f
 
 static i2c_master_dev_handle_t s_dev;
+static float s_shunt_ohm;
 static float s_cur_lsb;   /* amperes per current LSB (after normalization) */
 
 static esp_err_t read_reg(uint8_t reg, uint16_t *val)
@@ -55,6 +56,7 @@ esp_err_t ina226_init(i2c_master_dev_handle_t dev,
                       float shunt_ohm)
 {
     s_dev = dev;
+    s_shunt_ohm = 0.0f;
 
     if (shunt_ohm < 0.001f) {
         ESP_LOGE(TAG, "shunt %.4f ohm is below the 1 mOhm minimum", shunt_ohm);
@@ -85,6 +87,7 @@ esp_err_t ina226_init(i2c_master_dev_handle_t dev,
     e = write_reg(REG_CONFIG, cfg);
     if (e != ESP_OK) { ESP_LOGE(TAG, "write CONFIG failed: %s", esp_err_to_name(e)); return e; }
 
+    s_shunt_ohm = shunt_ohm;
     ESP_LOGI(TAG, "calibrated: shunt=%.4f ohm max=%.1f A cur_LSB=%.1f uA cal=%u",
              shunt_ohm, max_current_a, s_cur_lsb * 1e6f, (unsigned)cal);
     return ESP_OK;
@@ -122,28 +125,27 @@ void ina226_set_average(uint8_t avg_code)
 
 esp_err_t ina226_set_ocp_threshold(float threshold_a)
 {
-    /* The shunt comparator compares the shunt-voltage register against MAR.
-     * Shunt voltage at the threshold = threshold_a * R_shunt. MAR counts
-     * shunt-voltage LSBs, where shuntV_LSB = 25 * current_LSB (amperes) *
-     * R_shunt (V/amp) — so R_shunt cancels and
-     *     MAR = threshold_a / (25 * current_LSB).
-     * (R_shunt cancels, so a wrong shunt can't skew the threshold; it's the
-     * current LSB — set from max_current in init — that matters.) */
-    float current_lsb = s_cur_lsb;           /* amperes per current LSB */
-    uint32_t mar = (uint32_t)llroundf(threshold_a / (25.0f * current_lsb));
-    if (mar == 0u) mar = 1u;                 /* guard: can't alert on 0 */
+    /* Alert Limit uses the signed shunt-voltage register's fixed 2.5 uV LSB. */
+    if (!isfinite(threshold_a) || threshold_a <= 0.0f ||
+        !isfinite(s_shunt_ohm) || s_shunt_ohm <= 0.0f)
+        return ESP_ERR_INVALID_ARG;
+    double limit = (double)threshold_a * s_shunt_ohm / SHUNT_LSB_V;
+    if (!isfinite(limit) || limit < 0.5 || limit > 32767.0)
+        return ESP_ERR_INVALID_ARG;
+    uint16_t raw = (uint16_t)llround(limit);
 
-    /* MAR, then MCP (enable shunt comparator only, alert above MAR), then
-     * LAR (0 = non-latched / level ALERT). Writes only to 0x08/0x0A/0x09 —
-     * CAL and CONFIG are untouched, so all the reads above are unaffected. */
-    esp_err_t e = write_reg(REG_ALERT, (uint16_t)mar);
-    if (e == ESP_OK) e = write_reg(REG_MCP, 0x8000);
-    if (e == ESP_OK) e = write_reg(REG_LAR, 0x0000);
+    esp_err_t e = write_reg(REG_ALERT, raw);
     if (e != ESP_OK) {
-        ESP_LOGE(TAG, "set OCP threshold failed: %s", esp_err_to_name(e));
+        ESP_LOGE(TAG, "write Alert Limit (0x07) failed: %s", esp_err_to_name(e));
         return e;
     }
-    ESP_LOGI(TAG, "OCP threshold: MAR=%u (~%.2f A, shunt-only, non-latched)",
-             (unsigned)mar, threshold_a);
+    // SOL only; APOL=0 (active-low), LEN=0 (non-latched).
+    e = write_reg(REG_MASK, MASK_SOL);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "write Mask/Enable (0x06) failed: %s", esp_err_to_name(e));
+        return e;
+    }
+    ESP_LOGI(TAG, "OCP threshold: limit=%u (~%.2f A, active-low, non-latched)",
+             (unsigned)raw, raw * SHUNT_LSB_V / s_shunt_ohm);
     return ESP_OK;
 }

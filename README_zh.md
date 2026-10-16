@@ -135,6 +135,8 @@ cp main/config.h.example main/config.h   # 然后编辑 main/config.h（被 git 
 
 ## 过流告警（OCP）
 
+按 INA226 寄存器定义，硬件阈值写入 Alert Limit（`0x07`），使用 `threshold_a × shunt_ohm / 2.5µV` 换算；Mask/Enable（`0x06`）设为 `0x8000`，启用分流电压超限、低电平有效、非锁存告警。阈值必须为正数且落在分流电压量程内，不会修改校准或采样配置。驱动回归验证可运行 `python3 -m unittest discover -s tests -v`。
+
 两条独立的检测路径都会把过流事件记录到后端，并可在面板的 **异常日志** 页查看：
 
 - **设备（硬件）** —— INA226 的 **ALERT** 比较器在电流超过 `CFG_OCP_THRESHOLD_A`
